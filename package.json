@@ -1,0 +1,27 @@
+{
+	"name": "hillview_common",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Web UI code shared by the hillview frontend and the recon workbench: the scene's geodesy, names and labels, the zoom view's parts. Included in both as a git submodule.",
+	"scripts": {
+		"test": "vitest run",
+		"check": "tsc --noEmit -p . && svelte-check --tsconfig ./tsconfig.json --threshold warning"
+	},
+	"peerDependencies": {
+		"svelte": "^5.55.0",
+		"three": "^0.185.0"
+	},
+	"peerDependenciesMeta": {
+		"three": { "optional": true }
+	},
+	"devDependencies": {
+		"@types/node": "24.6.2",
+		"@types/three": "0.185.1",
+		"svelte": "5.56.4",
+		"svelte-check": "4.7.1",
+		"three": "0.185.1",
+		"typescript": "6.0.3",
+		"vitest": "4.1.4"
+	}
+}

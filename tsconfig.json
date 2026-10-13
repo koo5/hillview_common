@@ -1,0 +1,22 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": ["node"],
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": false,
+		"verbatimModuleSyntax": false,
+		"isolatedModules": true,
+		"paths": {
+			"$terrain/*": ["./terrain/*"],
+			"$zoomview/*": ["./zoomview/*"],
+			"$world/*": ["./world/*"]
+		}
+	},
+	"include": ["terrain", "zoomview", "world", "*.config.ts"]
+}

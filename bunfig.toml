@@ -1,0 +1,5 @@
+[install]
+# Dependency cooloff, as in the apps that include this repo: only resolve package versions
+# published at least 14 days ago. List a package in the excludes to exempt it (a CVE fix).
+minimumReleaseAge = 1209600
+minimumReleaseAgeExcludes = []
