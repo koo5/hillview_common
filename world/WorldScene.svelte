@@ -58,6 +58,9 @@
 	let layers: Awaited<ReturnType<typeof loadEarth>> | null = null;
 	let ground: number | null = null;
 	let depthMode = $state<DepthMode | null>(null);
+	/** the terrain's tiles: ready/wanted, and whether none is still loading (what a test waits for) */
+	let tiles = $state('');
+	let settled = $state(false);
 	const gate = new ViewGate();
 	let scratch: THREE_NS.Vector3 | null = null;
 	let raf = 0;
@@ -110,6 +113,9 @@
 		// drawn only on change: a view the gate held back is asked for once its interval is up
 		else if (ask === 'soon' && !retry) retry = setTimeout(() => { retry = 0; draw(); }, gate.interval);
 		renderer.render(scene, camera);
+		const st = terrain.stats;
+		tiles = `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}`;
+		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon';
 	}
 
 	/** ask for one frame; many asks before it lands are one frame */
@@ -220,6 +226,8 @@
 	data-testid={testid}
 	data-ready={!loading && !error}
 	data-depth={depthMode}
+	data-tiles={tiles}
+	data-settled={settled}
 	{onpointerdown}
 	{onpointermove}
 	{onpointerup}
