@@ -93,23 +93,31 @@ function fmtDeg(d: number, step: number): string {
 }
 
 export const TAPE_H = 26;
+/** the tape's scale for the app's label spacing factor: it follows that slider,
+ * within reason -- below 0.7 the labels stop being readable, above 1.2 it covers the picture */
+export const tapeScale = (space: number) => Math.min(1.2, Math.max(0.7, space));
 
-/** paint the tape across the bottom `TAPE_H` px of a W x H canvas (CSS px), and the centre readout */
+/** paint the tape across the bottom `TAPE_H` px of a W x H canvas (CSS px), and the centre readout;
+ * `lift` px higher where something covers the canvas's foot (the viewer's floating controls) */
 export function paintTape(ctx: CanvasRenderingContext2D, W: number, H: number, ticks: Tick[],
-	centre: { bearing: number; pitch: number; hfov: number }): void {
-	const y0 = H - TAPE_H;
+	centre: { bearing: number; pitch: number; hfov: number }, scale = 1, lift = 0): void {
+	const k = scale;
+	const tapeH = TAPE_H * k;
+	const y0 = H - tapeH;
 	ctx.save();
-	ctx.fillStyle = 'rgba(10,14,20,0.55)';
-	ctx.fillRect(0, y0, W, TAPE_H);
+	ctx.translate(0, -lift);
+	// light (the operator, 2026-10-16): the picture under it is what is being judged
+	ctx.fillStyle = 'rgba(10,14,20,0.3)';
+	ctx.fillRect(0, y0, W, tapeH);
 	ctx.strokeStyle = 'rgba(230,236,245,0.8)';
 	ctx.fillStyle = '#e6ecf5';
-	ctx.font = '500 11px system-ui, sans-serif';
+	ctx.font = `500 ${Math.round(11 * k)}px system-ui, sans-serif`;
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'bottom';
 	ctx.lineWidth = 1;
 	ctx.beginPath();
 	for (const t of ticks) {
-		const len = t.major ? 8 : 4;
+		const len = (t.major ? 8 : 4) * k;
 		ctx.moveTo(Math.round(t.x) + 0.5, y0);
 		ctx.lineTo(Math.round(t.x) + 0.5, y0 + len);
 	}
@@ -117,27 +125,27 @@ export function paintTape(ctx: CanvasRenderingContext2D, W: number, H: number, t
 	for (const t of ticks) {
 		if (!t.label) continue;
 		const card = /^[NSEW]+$/.test(t.label);
-		ctx.font = card ? '700 12px system-ui, sans-serif' : '500 11px system-ui, sans-serif';
+		ctx.font = card ? `700 ${Math.round(12 * k)}px system-ui, sans-serif` : `500 ${Math.round(11 * k)}px system-ui, sans-serif`;
 		ctx.fillStyle = t.label === 'N' ? '#ff8a7a' : card ? '#ffffff' : '#c9d3e0';
-		ctx.fillText(t.label, t.x, H - 3);
+		ctx.fillText(t.label, t.x, H - 3 * k);
 	}
 	// the centre: a marker, and what it points at
 	const cx = W / 2;
 	ctx.fillStyle = '#ffd34d';
 	ctx.beginPath();
-	ctx.moveTo(cx - 5, y0 - 1);
-	ctx.lineTo(cx + 5, y0 - 1);
-	ctx.lineTo(cx, y0 + 6);
+	ctx.moveTo(cx - 5 * k, y0 - 1);
+	ctx.lineTo(cx + 5 * k, y0 - 1);
+	ctx.lineTo(cx, y0 + 6 * k);
 	ctx.closePath();
 	ctx.fill();
 	const fine = centre.hfov < 5;
 	const text = `${centre.bearing.toFixed(fine ? 2 : 1)}° ${windOf(centre.bearing)} · pitch ${centre.pitch >= 0 ? '+' : ''}${centre.pitch.toFixed(fine ? 2 : 1)}° · ${centre.hfov < 10 ? centre.hfov.toFixed(2) : centre.hfov.toFixed(0)}° wide`;
-	ctx.font = '600 12px system-ui, sans-serif';
-	const w = ctx.measureText(text).width + 14;
-	ctx.fillStyle = 'rgba(10,14,20,0.75)';
-	ctx.fillRect(cx - w / 2, y0 - 22, w, 18);
+	ctx.font = `600 ${Math.round(12 * k)}px system-ui, sans-serif`;
+	const w = ctx.measureText(text).width + 14 * k;
+	ctx.fillStyle = 'rgba(10,14,20,0.45)';
+	ctx.fillRect(cx - w / 2, y0 - 22 * k, w, 18 * k);
 	ctx.fillStyle = '#ffd34d';
 	ctx.textBaseline = 'middle';
-	ctx.fillText(text, cx, y0 - 13);
+	ctx.fillText(text, cx, y0 - 13 * k);
 	ctx.restore();
 }
