@@ -22,6 +22,9 @@ Next to arrive (the design's phase 3): the lean scene viewer, cut out of the wor
   `terrain/TerrainViewer.svelte` is the one exception, inherited, and resolves in both apps.
 - **Dependencies are peers.** `svelte` and `three` (optional: only `world/` uses it, and mostly as
   types) come from the app. Dev dependencies follow the apps' 14-day cooloff (`bunfig.toml`).
+  They are the only bare imports outside tests: each app dedupes them to its own copy (vite
+  `resolve.dedupe`). Any other bare import would resolve from this repo's own `node_modules` in
+  development and fail in an app's Docker build, which copies these directories without it.
 - **Tested here.** `bun install && bun run test` (vitest) and `bun run check` (tsc, svelte-check)
   must pass on every commit, without either app.
 - **Mirrors are pinned.** Where a module mirrors code in another language or another place, a test
