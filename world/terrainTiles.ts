@@ -555,7 +555,7 @@ export async function loadOrtho(url: string, z: number, x: number, y: number, dz
 	await Promise.all(Array.from({ length: k * k }, async (_, i) => {
 		const cx = i % k, cy = Math.floor(i / k);
 		const u = url.replace('{z}', String(z + dz)).replace('{x}', String(x * k + cx)).replace('{y}', String(y * k + cy));
-		const r = await fetch(u, { signal, headers: requestHeaders(undefined, requestId) });
+		const r = await fetch(u, { signal, headers: requestHeaders(u, undefined, requestId) });
 		if (r.status === 404) return;
 		if (!r.ok) throw new RequestFailure(`Orthophoto HTTP ${r.status}`, r.status === 429 || r.status >= 500);
 		const img = await createImageBitmap(await r.blob());
@@ -722,7 +722,7 @@ export class TerrainTiles {
 			return {
 				id: key, label: `Terrain ${key}`, kind: 'terrain' as const, url, priority, cacheable: true,
 				run: async (signal: AbortSignal, requestId: string) => {
-					const r = await responseOrThrow(url, signal, { headers: requestHeaders(undefined, requestId) });
+					const r = await responseOrThrow(url, signal, { headers: requestHeaders(url, undefined, requestId) });
 					const buf = await r.arrayBuffer();
 					signal.throwIfAborted();
 					if (this.disposed) return;

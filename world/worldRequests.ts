@@ -223,7 +223,7 @@ export function resourceReader(requests: WorldRequests, scope: string, maxAttemp
 			historyOnly: true, retryWhen,
 			priority: kind === 'world' || kind === 'cameras' ? -10 : 0,
 			maxAttempts: init?.method && init.method !== 'GET' ? 1 : maxAttempts,
-			run: async (signal, requestId) => read(await responseOrThrow(url, signal, { ...init, headers: requestHeaders(init, requestId) }))
+			run: async (signal, requestId) => read(await responseOrThrow(url, signal, { ...init, headers: requestHeaders(url, init, requestId) }))
 		}, init?.signal ?? undefined);
 	};
 }
@@ -239,8 +239,25 @@ function describeRequest(url: string): { kind: RequestKind; label: string } {
 	return { kind: 'world', label: url.includes('/copc') ? 'Octree availability' : 'World metadata' };
 }
 
-export function requestHeaders(init: RequestInit | undefined, requestId: string): Headers {
+/**
+ * The request id goes only to this page's own origin: the workbench's API reads it, to put a read
+ * beside its server log (world_requests.py). Another origin (earth, read straight from the public
+ * app) never reads it, and a custom header there costs a CORS preflight for every distinct URL
+ * (earth refused it outright: 400, every tile lost).
+ */
+export function requestHeaders(url: string, init: RequestInit | undefined, requestId: string): Headers {
 	const headers = new Headers(init?.headers);
-	headers.set('X-World-Request-Id', requestId);
+	if (sameOrigin(url)) headers.set('X-World-Request-Id', requestId);
 	return headers;
+}
+
+/** a URL on this page's origin; without a page (tests, workers without one) only a relative URL is */
+export function sameOrigin(url: string): boolean {
+	const here = globalThis.location?.href;
+	if (!here) return !/^[a-z][a-z0-9+.-]*:/i.test(url);
+	try {
+		return new URL(url, here).origin === new URL(here).origin;
+	} catch {
+		return false;
+	}
 }

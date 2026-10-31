@@ -214,7 +214,7 @@ export class FootprintTiles {
 			return {
 				id: key, label: `OpenStreetMap ${key}`, kind: 'map' as const, url, priority, cacheable: true,
 				run: async (signal: AbortSignal, requestId: string) => {
-					const r = await responseOrThrow(url, signal, { headers: requestHeaders(undefined, requestId) });
+					const r = await responseOrThrow(url, signal, { headers: requestHeaders(url, undefined, requestId) });
 					const d = await r.json() as MapTile;
 					signal.throwIfAborted();
 					if (this.disposed) return;

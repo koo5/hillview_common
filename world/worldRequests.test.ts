@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { WorldRequests, RequestFailure, responseOrThrow, type RequestSpec } from './worldRequests';
+import { WorldRequests, RequestFailure, requestHeaders, responseOrThrow, sameOrigin, type RequestSpec } from './worldRequests';
 const wait = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
 function gate() {
 	let resolve!: (value?: unknown) => void;
@@ -107,4 +107,25 @@ test('an operation can make a non-transient read terminal on its first attempt',
 	expect(q.snapshot()[0].state).toBe('failed');
 	expect(q.snapshot()[0].attempts).toBe(1);
 	q.dispose();
+});
+
+describe('requestHeaders', () => {
+	test("the request id goes to this page's origin only: another (earth) would need a preflight per URL", () => {
+		const page = (globalThis as { location?: unknown }).location;
+		try {
+			Object.defineProperty(globalThis, 'location', { value: { href: 'https://wb.example/recon/panel/world' }, configurable: true });
+			expect(requestHeaders('/api/terrain/tile/1/2/3.bin', undefined, 'r1').get('X-World-Request-Id')).toBe('r1');
+			expect(requestHeaders('https://wb.example/api/x', undefined, 'r2').get('X-World-Request-Id')).toBe('r2');
+			const earth = requestHeaders('https://earth.example/t/r/terrain/surface/1/2/3.q16', { headers: { Accept: 'x' } }, 'r3');
+			expect(earth.get('X-World-Request-Id')).toBeNull();
+			expect(earth.get('Accept')).toBe('x');
+		} finally {
+			Object.defineProperty(globalThis, 'location', { value: page, configurable: true });
+		}
+	});
+
+	test('without a page, only a relative URL is same-origin', () => {
+		expect(sameOrigin('/api/x')).toBe(true);
+		expect(sameOrigin('https://earth.example/x')).toBe(false);
+	});
 });
