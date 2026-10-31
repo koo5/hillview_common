@@ -23,13 +23,24 @@ export class ViewGate {
 	private t = -Infinity;
 	constructor(private minMs = 330) {}
 
-	due(position: ArrayLike<number>, view: View, now: number, force = false): boolean {
+	/** whether to ask the layers now; a caller drawing only on change asks again on 'soon' */
+	state(position: ArrayLike<number>, view: View, now: number, force = false): 'due' | 'soon' | 'same' {
 		const pose = [...Array.from(position, (v) => v.toFixed(1)), ...view.dir.map((v) => v.toFixed(3)),
 			view.fovY.toPrecision(3), view.heightPx].join(',');
-		if (!force && (pose === this.pose || now - this.t < this.minMs)) return false;
+		if (!force && pose === this.pose) return 'same';
+		if (!force && now - this.t < this.minMs) return 'soon';
 		this.pose = pose;
 		this.t = now;
-		return true;
+		return 'due';
+	}
+
+	due(position: ArrayLike<number>, view: View, now: number, force = false): boolean {
+		return this.state(position, view, now, force) === 'due';
+	}
+
+	/** the interval: how long a 'soon' waits at most */
+	get interval() {
+		return this.minMs;
 	}
 
 	reset() {

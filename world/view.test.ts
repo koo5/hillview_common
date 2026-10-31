@@ -17,6 +17,15 @@ describe('ViewGate', () => {
 		expect(g.due([5, 0, 10], { ...wide, fovY: 5, dir: [1, 0, 0] }, 1200)).toBe(true);
 	});
 
+	it('tells a changed view inside the interval (soon) from an unchanged one (same)', () => {
+		const g = new ViewGate(330);
+		expect(g.state([0, 0, 0], wide, 0)).toBe('due');
+		expect(g.state([0, 0, 0], wide, 10)).toBe('same');
+		expect(g.state([1, 0, 0], wide, 10)).toBe('soon');
+		expect(g.state([1, 0, 0], wide, 400)).toBe('due');
+		expect(g.interval).toBe(330);
+	});
+
 	it('goes through when forced, or once after a reset', () => {
 		const g = new ViewGate();
 		g.due([0, 0, 0], wide, 0);
