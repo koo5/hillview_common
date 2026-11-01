@@ -109,6 +109,12 @@ export class AtlasCloud {
 		return this.residency.summary;
 	}
 
+	/** no batch to read and no view waiting: what the view can show of this tree, it shows. A full budget
+	 * leaves later nodes pending for good (WorldResidency blocks the next), so `pending` cannot say this. */
+	get idle() {
+		return !this.running && !this.wanted;
+	}
+
 	private async pump() {
 		const THREE = this.THREE, source = this.source!;
 		this.running = true;
@@ -122,7 +128,9 @@ export class AtlasCloud {
 				const t = this.treeCamera;
 				toTree.decompose(t.position, t.quaternion, new THREE.Vector3());
 				t.fov = camera.fov; t.aspect = camera.aspect; t.near = camera.near; t.far = camera.far; t.zoom = camera.zoom;
-				t.updateProjectionMatrix();
+				// the camera's own projection (reversed-Z included); the tree camera is never rendered to set its own
+				t.projectionMatrix.copy(camera.projectionMatrix);
+				t.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
 				const { measure, nearGroups } = cameraMeasure(THREE, t, [0, 0, 0], heightPx, reversed);
 				this.residency.reconcile(planWorldView(source.select({}), measure), 'dense');
 				while (!this.wanted && !this.disposed) {
@@ -135,6 +143,8 @@ export class AtlasCloud {
 						each: async (_index, node, chunk) => { await this.residency.accept(node, chunk); }
 					});
 					this.rebuild();
+					// a failed block is read again by a later batch (residency keeps nothing in flight): recovered
+					this.error = null;
 					this.o.onChange?.();
 				}
 			}

@@ -71,6 +71,8 @@
 	/** the atlas's resident points and pending blocks; its failure, said on the page */
 	let atlasState = $state('');
 	let atlasError = $state<string | null>(null);
+	/** the atlas's own start, after the scene is up: 'opening' while its hierarchy is read */
+	let atlasOpened: 'none' | 'opening' | 'open' = 'none';
 	const requests = new WorldRequests();
 	const gate = new ViewGate();
 	let scratch: THREE_NS.Vector3 | null = null;
@@ -132,10 +134,11 @@
 		tiles = `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}`;
 		if (atlas) {
 			const a = atlas.summary;
-			atlasState = `${a.points}/${a.pending}`;
+			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
 			atlasError = atlas.error;
 		}
-		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon' && (!atlas || (atlas.summary.pending === 0 && !atlas.error));
+		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon' && atlasOpened !== 'opening' &&
+			(!atlas || (atlas.idle && !atlas.error));
 	}
 
 	/** ask for one frame; many asks before it lands are one frame */
@@ -221,30 +224,39 @@
 			resize();
 			ensureFrame();
 			draw();
-			if (atlasUrl) {
-				try {
-					const a = await loadAtlas(atlasUrl, atlasChannel, { signal: abort.signal });
-					if (destroyed || !frame) return;
-					// the snapshot's licence and the credits it carries, after earth's own
-					credits = [...earth.credits, { text: `Point cloud: ${a.version.licence.name}`, url: a.version.licence.url, licence: a.version.licence.spdx },
-						...a.version.credits.map((c) => ({ text: c.text, url: c.url ?? a.version.licence.url, licence: a.version.licence.spdx }))];
-					atlas = new AtlasCloud(THREE, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin), scene: frame, requests,
-						budgetMiB: atlasBudgetMiB, onChange: () => draw() });
-					await atlas.open();
-					if (destroyed) return;
-					scene.add(atlas.object);
-					gate.reset();
-					draw();
-				} catch (e) {
-					if (!destroyed) atlasError = `atlas: ${e instanceof Error ? e.message : String(e)}`;
-				}
-			}
 		} catch (e) {
 			if (!destroyed) error = e instanceof Error ? e.message : String(e);
 		} finally {
 			loading = false;
 		}
+		// the atlas starts after the scene is up: reading its hierarchy must not hold the terrain under the overlay
+		if (atlasUrl && !error && !destroyed) void openAtlas(atlasUrl);
 	});
+
+	async function openAtlas(url: string) {
+		atlasOpened = 'opening';
+		atlasState = 'opening';
+		try {
+			const a = await loadAtlas(url, atlasChannel, { signal: abort.signal });
+			if (destroyed || !frame || !three || !scene || !layers) { atlasOpened = 'none'; return; }
+			// the snapshot's licence and the credits it carries, after earth's own
+			credits = [...layers.credits, { text: `Point cloud: ${a.version.licence.name}`, url: a.version.licence.url, licence: a.version.licence.spdx },
+				...a.version.credits.map((c) => ({ text: c.text, url: c.url ?? a.version.licence.url, licence: a.version.licence.spdx }))];
+			const cloud = new AtlasCloud(three, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin), scene: frame, requests,
+				budgetMiB: atlasBudgetMiB, onChange: () => draw() });
+			await cloud.open();
+			if (destroyed) { cloud.dispose(); return; }
+			atlas = cloud;
+			scene.add(cloud.object);
+			atlasOpened = 'open';
+			gate.reset();
+			draw();
+		} catch (e) {
+			atlasOpened = 'none';
+			atlasState = '';
+			if (!destroyed) { atlasError = `atlas: ${e instanceof Error ? e.message : String(e)}`; draw(); }
+		}
+	}
 
 	onDestroy(() => {
 		destroyed = true;
@@ -287,7 +299,7 @@
 	{/if}
 	{#if credits.length}
 		<div class="credits" data-testid="{testid}-credits">
-			{#each credits as c, i (c.text)}
+			{#each credits as c, i (i)}
 				{#if i}<span> · </span>{/if}<a href={c.terms_url ?? c.url} target="_blank" rel="noopener">{c.text}</a>
 			{/each}
 		</div>
