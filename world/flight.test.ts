@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Vector3 } from 'three';
-import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, FlyKeys, savedFlyLayout, zoomedFov } from './flight';
+import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, savedFlyLayout, zoomedFov } from './flight';
 
 test('metric preference has one default and bounded physical range', () => {
 	expect(DEFAULT_FLY_MPS).toBe(5);
@@ -70,4 +70,29 @@ test('Z and X zoom in equal steps, within bounds; other keys are no zoom', () =>
 	expect(zoomedFov(0.1, 'KeyZ')).toBe(0.1);
 	expect(zoomedFov(119, 'KeyX')).toBe(120);
 	expect(zoomedFov(55, 'KeyW')).toBeNull();
+});
+
+test('a flight moves the camera along its own axes and comes to rest when the keys are let go', async () => {
+	const THREE = await import('three');
+	const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1000);
+	const f = new Flight(THREE, new FlyKeys('qwerty'), 5);
+	f.keys.press('KeyW');
+	for (let i = 0; i < 60; i++) f.step(camera, 1 / 30);
+	expect(camera.position.z).toBeLessThan(-5);
+	expect(Math.abs(camera.position.x)).toBeLessThan(1e-9);
+	f.keys.release('KeyW');
+	let moving = true;
+	for (let i = 0; i < 600 && moving; i++) moving = f.step(camera, 1 / 30);
+	expect(moving).toBe(false);
+	f.keys.press('KeyQ');
+	f.step(camera, 0.5);
+	expect(camera.up.clone().applyQuaternion(camera.quaternion).x).not.toBe(0);
+	f.stop();
+	expect(f.step(camera, 1 / 30)).toBe(false);
+	// a touch pad's thrust flies like a key; letting it go stops its own axis
+	const before = camera.position.clone();
+	expect(f.step(camera, 0.5, { thrust: [0, 1, 0] })).toBe(true);
+	expect(camera.position.distanceTo(before)).toBeGreaterThan(0);
+	f.halt({ y: true });
+	expect(f.step(camera, 1 / 30)).toBe(false);
 });

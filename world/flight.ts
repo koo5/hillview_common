@@ -156,3 +156,45 @@ export function lookRotate(THREE: Three, camera: THREE_NS.PerspectiveCamera, dxP
 	const axis = new THREE.Vector3(-dyPx, -dxPx, 0).normalize();
 	camera.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle)).normalize();
 }
+
+/** One ship: the held keys, the momentum and the look gathered between frames, flown a frame at a time. A viewer
+ * owns what feeds it (its key events, its mouse or touch pads) and what the camera means afterwards. */
+export class Flight {
+	speed: number;
+	private velocity: THREE_NS.Vector3;
+	private lookPx: [number, number] = [0, 0];
+	constructor(private THREE: Three, readonly keys: FlyKeys, speed: number) {
+		this.speed = speed;
+		this.velocity = new THREE.Vector3();
+	}
+	/** mouse movement for the next frame, in lookRotate's pixels */
+	look(dx: number, dy: number) {
+		this.lookPx[0] += dx;
+		this.lookPx[1] += dy;
+	}
+	/** one frame of `dt` seconds, with what other controls add to the keys (touch pads: thrust per axis, roll);
+	 * true while anything still moves (a key held, momentum left) */
+	step(camera: THREE_NS.PerspectiveCamera, dt: number, extra: { thrust?: [number, number, number]; roll?: number } = {}): boolean {
+		lookRotate(this.THREE, camera, ...this.lookPx);
+		this.lookPx = [0, 0];
+		const [kx, ky, kz] = this.keys.thrust(), [ex, ey, ez] = extra.thrust ?? [0, 0, 0];
+		const thrust = new this.THREE.Vector3(kx + ex, ky + ey, kz + ez);
+		camera.position.add(integrateFlyMotion(this.velocity, thrust, this.speed, dt).applyQuaternion(camera.quaternion));
+		const roll = this.keys.roll() + (extra.roll ?? 0);
+		if (roll) camera.rotateZ(ROLL_RATE * dt * roll);
+		if (this.keys.down('level')) levelWings(this.THREE, camera);
+		return this.keys.flying || thrust.lengthSq() > 0 || this.velocity.lengthSq() > 0;
+	}
+	/** momentum stopped on these camera-local axes (a released touch pad stops its own, not another's) */
+	halt(axes: { x?: boolean; y?: boolean; z?: boolean } = { x: true, y: true, z: true }) {
+		if (axes.x) this.velocity.x = 0;
+		if (axes.y) this.velocity.y = 0;
+		if (axes.z) this.velocity.z = 0;
+	}
+	/** every key let go and the ship at rest */
+	stop() {
+		this.keys.clear();
+		this.halt();
+		this.lookPx = [0, 0];
+	}
+}
