@@ -15,6 +15,8 @@
 	import { TerrainTiles, horizonM } from './terrainTiles';
 	import { createWorldRenderer, type DepthMode } from './renderer';
 	import { ViewGate, cameraView } from './view';
+	import { AtlasCloud, loadAtlas } from './atlasCloud';
+	import { WorldRequests } from './worldRequests';
 
 	type Props = {
 		/** the earth service's base URL */
@@ -33,11 +35,15 @@
 		/** a drag turned the view: the bearing and pitch now shown */
 		onlook?: (look: { bearing: number; pitch: number }) => void;
 		oneye?: (eyeM: number) => void;
+		/** a published atlas (atlas.hillview.cz): its channel's world snapshot is drawn as points */
+		atlasUrl?: string;
+		atlasChannel?: string;
+		atlasBudgetMiB?: number;
 		testid?: string;
 	};
 	let {
 		earthUrl, channel = 'prod', model = 'surface', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55,
-		onlook, oneye, testid = 'world-scene'
+		onlook, oneye, atlasUrl, atlasChannel = 'prod', atlasBudgetMiB = 64, testid = 'world-scene'
 	}: Props = $props();
 
 	/** a frame is good for this far from its origin; past it the scene is laid out again */
@@ -61,6 +67,11 @@
 	/** the terrain's tiles: ready/wanted, and whether none is still loading (what a test waits for) */
 	let tiles = $state('');
 	let settled = $state(false);
+	let atlas: AtlasCloud | null = null;
+	/** the atlas's resident points and pending blocks; its failure, said on the page */
+	let atlasState = $state('');
+	let atlasError = $state<string | null>(null);
+	const requests = new WorldRequests();
 	const gate = new ViewGate();
 	let scratch: THREE_NS.Vector3 | null = null;
 	let raf = 0;
@@ -91,6 +102,7 @@
 		});
 		gate.reset();
 		scene.add(terrain.group);
+		atlas?.setScene(frame);
 	}
 
 	function render() {
@@ -109,13 +121,21 @@
 		camera.updateProjectionMatrix();
 		const v = cameraView(camera, scratch!, host.clientHeight || 800);
 		const ask = gate.state(cam, v, performance.now());
-		if (ask === 'due') terrain.update(cam, v);
+		if (ask === 'due') {
+			terrain.update(cam, v);
+			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
+		}
 		// drawn only on change: a view the gate held back is asked for once its interval is up
 		else if (ask === 'soon' && !retry) retry = setTimeout(() => { retry = 0; draw(); }, gate.interval);
 		renderer.render(scene, camera);
 		const st = terrain.stats;
 		tiles = `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}`;
-		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon';
+		if (atlas) {
+			const a = atlas.summary;
+			atlasState = `${a.points}/${a.pending}`;
+			atlasError = atlas.error;
+		}
+		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon' && (!atlas || (atlas.summary.pending === 0 && !atlas.error));
 	}
 
 	/** ask for one frame; many asks before it lands are one frame */
@@ -201,6 +221,24 @@
 			resize();
 			ensureFrame();
 			draw();
+			if (atlasUrl) {
+				try {
+					const a = await loadAtlas(atlasUrl, atlasChannel, { signal: abort.signal });
+					if (destroyed || !frame) return;
+					// the snapshot's licence and the credits it carries, after earth's own
+					credits = [...earth.credits, { text: `Point cloud: ${a.version.licence.name}`, url: a.version.licence.url, licence: a.version.licence.spdx },
+						...a.version.credits.map((c) => ({ text: c.text, url: c.url ?? a.version.licence.url, licence: a.version.licence.spdx }))];
+					atlas = new AtlasCloud(THREE, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin), scene: frame, requests,
+						budgetMiB: atlasBudgetMiB, onChange: () => draw() });
+					await atlas.open();
+					if (destroyed) return;
+					scene.add(atlas.object);
+					gate.reset();
+					draw();
+				} catch (e) {
+					if (!destroyed) atlasError = `atlas: ${e instanceof Error ? e.message : String(e)}`;
+				}
+			}
 		} catch (e) {
 			if (!destroyed) error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -213,6 +251,8 @@
 		abort.abort();
 		if (raf) cancelAnimationFrame(raf);
 		if (retry) clearTimeout(retry);
+		atlas?.dispose();
+		requests.dispose();
 		observer?.disconnect();
 		terrain?.dispose();
 		renderer?.dispose();
@@ -228,6 +268,7 @@
 	data-depth={depthMode}
 	data-tiles={tiles}
 	data-settled={settled}
+	data-atlas={atlasState}
 	{onpointerdown}
 	{onpointermove}
 	{onpointerup}
@@ -240,6 +281,9 @@
 		<div class="message" data-testid="{testid}-error">{error}</div>
 	{:else if loading}
 		<div class="message" data-testid="{testid}-loading">Loading the 3D world…</div>
+	{/if}
+	{#if atlasError}
+		<div class="atlas-error" data-testid="{testid}-atlas-error">{atlasError}</div>
 	{/if}
 	{#if credits.length}
 		<div class="credits" data-testid="{testid}-credits">
@@ -272,6 +316,15 @@
 		justify-content: center;
 		color: #1d2b3a;
 		font: 500 14px system-ui, sans-serif;
+	}
+	.atlas-error {
+		position: absolute;
+		left: 0;
+		top: 0;
+		padding: 4px 8px;
+		background: rgba(160, 20, 20, 0.85);
+		color: white;
+		font: 12px system-ui, sans-serif;
 	}
 	.credits {
 		position: absolute;

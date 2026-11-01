@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Frame, fromEcef, toEcef } from './geodesy';
+import { Frame, fromEcef, rigid, toEcef } from './geodesy';
 import cases from './geodesy-cases.json';
 
 describe('geodesy, the browser half', () => {
@@ -32,5 +32,18 @@ describe('geodesy, the browser half', () => {
 		expect(Math.abs(la - 50.1)).toBeLessThan(1e-10);
 		expect(Math.abs(lo - 14.6)).toBeLessThan(1e-10);
 		expect(Math.abs(h - 321.5)).toBeLessThan(1e-6);
+	});
+});
+
+describe('rigid', () => {
+	it('carries a point in one tangent frame to where the other frame puts it, kilometres apart', () => {
+		const a = new Frame(50.187, 14.661, 210), b = new Frame(50.09, 14.42, 180);
+		const M = rigid(a, b);
+		for (const [lat, lon, h] of [[50.2, 14.7, 250], [50.1, 14.4, 190], [50.187, 14.661, 210]]) {
+			const p = a.fromGeodetic(lat, lon, h), want = b.fromGeodetic(lat, lon, h);
+			const got = [0, 1, 2].map((i) => M[i * 4] * p[0] + M[i * 4 + 1] * p[1] + M[i * 4 + 2] * p[2] + M[i * 4 + 3]);
+			for (let i = 0; i < 3; i++) expect(got[i]).toBeCloseTo(want[i], 6);
+		}
+		expect(M.slice(12)).toEqual([0, 0, 0, 1]);
 	});
 });

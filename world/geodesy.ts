@@ -76,3 +76,17 @@ export class Frame {
 			R[2][0] * u[0] + R[2][1] * u[1] + R[2][2] * u[2]];
 	}
 }
+
+/** The 4x4 (row-major) that carries `local` ENU coordinates into `world` ENU, p_w = M p: the TS half of
+ * geodesy.py's rigid(), the same rotation R_w R_l^T and translation R_w (o_l - o_w). */
+export function rigid(local: Frame, world: Frame): number[] {
+	const L = local.R, W = world.R;
+	const d = [local.o[0] - world.o[0], local.o[1] - world.o[1], local.o[2] - world.o[2]];
+	const M: number[] = [];
+	for (let i = 0; i < 3; i++) {
+		for (let j = 0; j < 3; j++) M.push(W[i][0] * L[j][0] + W[i][1] * L[j][1] + W[i][2] * L[j][2]);
+		M.push(W[i][0] * d[0] + W[i][1] * d[1] + W[i][2] * d[2]);
+	}
+	M.push(0, 0, 0, 1);
+	return M;
+}
