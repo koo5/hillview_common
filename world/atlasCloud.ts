@@ -13,6 +13,7 @@
 import type * as THREE_NS from 'three';
 import type { CopcChunk } from './copcSource';
 import { CopcSource } from './copcSource';
+import type { Credit } from './earth';
 import { readBlocks } from './copcBlocks';
 import { Frame, rigid } from './geodesy';
 import type { WorldRequests } from './worldRequests';
@@ -52,6 +53,18 @@ export async function loadAtlas(base: string, channel: string, opts: { fetch?: t
 	if (!Array.isArray(version.origin) || version.origin.length !== 3 || !version.origin.every(Number.isFinite))
 		throw new Error(`atlas: ${folder}version.json has no origin`);
 	return { pointer, version, treeUrl: `${folder}${version.files.tree}`, camerasUrl: `${folder}${version.files.cameras}` };
+}
+
+const page = (url: string) => url.replace(/\/+$/, '');
+
+/** the credit line of a scene drawing this snapshot over earth's layers: earth's sources, the snapshot's licence,
+ * then its own credits less the sources earth already names (one source page, one credit: ČÚZK's and Copernicus'
+ * terrain, which placed the snapshot and draws the ground). The export's README keeps the full list. */
+export function atlasCredits(earth: Credit[], v: AtlasVersion): Credit[] {
+	const shown = new Set(earth.map((c) => page(c.url)));
+	return [...earth, { text: `Point cloud: ${v.licence.name}`, url: v.licence.url, licence: v.licence.spdx },
+		...v.credits.filter((c) => c.url === null || !shown.has(page(c.url)))
+			.map((c) => ({ text: c.text, url: c.url ?? v.licence.url, licence: v.licence.spdx }))];
 }
 
 /** sRGB bytes to linear floats, as three's vertex colours are read (one table, 256 entries) */

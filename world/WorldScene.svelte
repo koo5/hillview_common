@@ -15,7 +15,7 @@
 	import { TerrainTiles, horizonM } from './terrainTiles';
 	import { createWorldRenderer, type DepthMode } from './renderer';
 	import { ViewGate, cameraView } from './view';
-	import { AtlasCloud, loadAtlas } from './atlasCloud';
+	import { AtlasCloud, atlasCredits, loadAtlas } from './atlasCloud';
 	import { WorldRequests } from './worldRequests';
 
 	type Props = {
@@ -53,6 +53,10 @@
 	let host: HTMLDivElement;
 	let error = $state<string | null>(null);
 	let credits = $state<Credit[]>([]);
+	/** the credit line: open on a wide scene, folded behind its button on a narrow one, until the viewer toggles it */
+	let width = $state(0);
+	let creditsToggled = $state<boolean | null>(null);
+	const creditsOpen = $derived(creditsToggled ?? width > 640);
 	let loading = $state(true);
 
 	let three: typeof THREE_NS | null = null;
@@ -239,9 +243,8 @@
 		try {
 			const a = await loadAtlas(url, atlasChannel, { signal: abort.signal });
 			if (destroyed || !frame || !three || !scene || !layers) { atlasOpened = 'none'; return; }
-			// the snapshot's licence and the credits it carries, after earth's own
-			credits = [...layers.credits, { text: `Point cloud: ${a.version.licence.name}`, url: a.version.licence.url, licence: a.version.licence.spdx },
-				...a.version.credits.map((c) => ({ text: c.text, url: c.url ?? a.version.licence.url, licence: a.version.licence.spdx }))];
+			// the snapshot's licence and its own credits, after earth's (each source named once)
+			credits = atlasCredits(layers.credits, a.version);
 			const cloud = new AtlasCloud(three, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin), scene: frame, requests,
 				budgetMiB: atlasBudgetMiB, onChange: () => draw() });
 			await cloud.open();
@@ -277,6 +280,7 @@
 <div
 	class="world-scene"
 	bind:this={host}
+	bind:clientWidth={width}
 	data-testid={testid}
 	data-ready={!loading && !error}
 	data-depth={depthMode}
@@ -300,10 +304,16 @@
 		<div class="atlas-error" data-testid="{testid}-atlas-error">{atlasError}</div>
 	{/if}
 	{#if credits.length}
-		<div class="credits" data-testid="{testid}-credits">
-			{#each credits as c, i (i)}
-				{#if i}<span> · </span>{/if}<a href={c.terms_url ?? c.url} target="_blank" rel="noopener">{c.text}</a>
-			{/each}
+		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button
+			 under that capture never gets its click -->
+		<div class="credits" role="contentinfo" data-testid="{testid}-credits" data-open={creditsOpen} onpointerdown={(e) => e.stopPropagation()}>
+			<button type="button" class="credits-toggle" aria-expanded={creditsOpen} title={creditsOpen ? 'Hide credits' : 'Credits'}
+				data-testid="{testid}-credits-toggle" onclick={() => (creditsToggled = !creditsOpen)}>ⓘ</button>
+			{#if creditsOpen}
+				{#each credits as c, i (i)}
+					{#if i}<span>{' · '}</span>{/if}<a href={c.terms_url ?? c.url} target="_blank" rel="noopener">{c.text}</a>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -340,11 +350,12 @@
 		color: white;
 		font: 12px system-ui, sans-serif;
 	}
+	/* a host whose own UI overlaps the scene's corner moves the line clear with these two */
 	.credits {
 		position: absolute;
-		right: 0;
-		bottom: 0;
-		max-width: 100%;
+		right: var(--world-scene-credits-right, 0px);
+		bottom: var(--world-scene-credits-bottom, 0px);
+		max-width: calc(100% - var(--world-scene-credits-right, 0px));
 		padding: 2px 6px;
 		background: rgba(255, 255, 255, 0.7);
 		color: #333;
@@ -353,5 +364,20 @@
 	}
 	.credits a {
 		color: inherit;
+	}
+	.credits-toggle {
+		margin-right: 4px;
+		padding: 0 2px;
+		border: 0;
+		background: none;
+		color: inherit;
+		font: inherit;
+		font-size: 13px;
+		line-height: 1;
+		vertical-align: middle;
+		cursor: pointer;
+	}
+	.credits[data-open='false'] {
+		border-radius: 4px 0 0 0;
 	}
 </style>

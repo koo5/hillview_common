@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadAtlas } from './atlasCloud';
+import { atlasCredits, loadAtlas } from './atlasCloud';
 
 const KEY = '120f2464015ecdee';
 const version = (over: Record<string, unknown> = {}) => ({
@@ -40,5 +40,28 @@ describe('loadAtlas', () => {
 		});
 		await expect(loadAtlas('https://atlas.example', 'prod', { fetch: other.f })).rejects.toThrow(/another version/);
 		await expect(loadAtlas('https://atlas.example', 'beta', { fetch: other.f })).rejects.toThrow(/404/);
+	});
+});
+
+describe('atlasCredits', () => {
+	const earth = [
+		{ text: '© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0)', url: 'https://geoportal.cuzk.cz', licence: 'CC BY 4.0' },
+		{ text: 'Copernicus WorldDEM-30 ...', url: 'https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model', licence: 'c' },
+		{ text: 'ČÚZK, 2024', url: 'https://geoportal.cuzk.gov.cz', licence: 'CC BY 4.0' }
+	];
+	it("names each source once: the snapshot's terrain credits go where earth already names the page", () => {
+		const v = version({ credits: [
+			{ text: 'Photographs: wegavision, via Panoramax', url: 'https://panoramax.openstreetmap.fr' },
+			{ text: '© OpenStreetMap contributors. Placements fitted in part ...', url: 'https://www.openstreetmap.org/copyright' },
+			{ text: '© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0): heights fitted to the terrain', url: 'https://geoportal.cuzk.cz/' },
+			{ text: 'produced using Copernicus WorldDEM-30 ...', url: 'https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model' },
+			{ text: 'EGM2008 geoid', url: 'https://earth-info.nga.mil/' },
+			{ text: 'a credit with no page', url: null }
+		] }) as unknown as Parameters<typeof atlasCredits>[1];
+		const c = atlasCredits(earth, v);
+		expect(c.map((x) => x.text)).toEqual(['© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0)', 'Copernicus WorldDEM-30 ...', 'ČÚZK, 2024',
+			'Point cloud: x', 'Photographs: wegavision, via Panoramax', '© OpenStreetMap contributors. Placements fitted in part ...',
+			'EGM2008 geoid', 'a credit with no page']);
+		expect(c.at(-1)).toEqual({ text: 'a credit with no page', url: 'u', licence: 'CC-BY-SA-4.0' });
 	});
 });
