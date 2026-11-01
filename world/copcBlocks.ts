@@ -10,8 +10,10 @@ import type { WorldRequests } from './worldRequests';
 export async function readBlocks(source: CopcSource, nodes: CopcNode[], opts: {
 	url: string; requests: WorldRequests | null; scope: string; signal: AbortSignal;
 	each: (index: number, node: CopcNode, chunk: CopcChunk) => Promise<void>;
+	/** before each block is awaited: a progress line, a yield to the page */
+	before?: (index: number, node: CopcNode) => Promise<void> | void;
 }): Promise<void> {
-	const { url, requests, scope, signal, each } = opts;
+	const { url, requests, scope, signal, each, before } = opts;
 	const jobs = nodes.map((node, priority) => ({
 		id: `${url}|${node.key}|${node.stride ?? 1}`, url, kind: 'points' as const, priority,
 		maxAttempts: 3, retryWhen: retryCopcRead,
@@ -22,6 +24,7 @@ export async function readBlocks(source: CopcSource, nodes: CopcNode[], opts: {
 	const reads = requests ? jobs.map(job => requests.request(scope, job, signal)) : null;
 	for (const read of reads ?? []) void read.catch(() => {});
 	for (const [index, node] of nodes.entries()) {
+		await before?.(index, node);
 		const chunk = reads ? await reads[index] : await source.load(node);
 		await each(index, node, chunk);
 	}

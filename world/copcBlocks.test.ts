@@ -11,10 +11,11 @@ test('blocks are read through the scheduler and handed over in order', async () 
 	const source = { load: async (node: CopcNode) => { loaded.push(node.key); return chunk(node.pointCount); } } as unknown as CopcSource;
 	const requests = new WorldRequests();
 	const scope = requests.scope('points');
-	const seen: [number, string, number][] = [];
+	const seen: (string | number)[][] = [];
 	await readBlocks(source, nodes, { url: 'https://atlas.example/w/full/k/world.copc.laz', requests, scope,
-		signal: new AbortController().signal, each: async (i, node, c) => { seen.push([i, node.key, c.positions.length / 3]); } });
-	expect(seen).toEqual([[0, '0-0-0-0', 1], [1, '1-0-0-0', 2], [2, '1-1-0-0', 3]]);
+		signal: new AbortController().signal, before: (i) => { seen.push(['before', i]); },
+		each: async (i, node, c) => { seen.push([i, node.key, c.positions.length / 3]); } });
+	expect(seen).toEqual([['before', 0], [0, '0-0-0-0', 1], ['before', 1], [1, '1-0-0-0', 2], ['before', 2], [2, '1-1-0-0', 3]]);
 	expect(loaded.sort()).toEqual(['0-0-0-0', '1-0-0-0', '1-1-0-0']);
 	expect(requests.snapshot().filter((r) => r.kind === 'points').length).toBe(3);
 });
