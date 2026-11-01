@@ -53,10 +53,14 @@
 	let host: HTMLDivElement;
 	let error = $state<string | null>(null);
 	let credits = $state<Credit[]>([]);
-	/** the credit line: open on a wide scene, folded behind its button on a narrow one, until the viewer toggles it */
+	/** the credit line: shown first on every scene (it carries ODbL attribution, which OSM's guidelines let fold only
+	 * once it was shown). A narrow scene folds it behind its button on the first touch of the scene or after 5 s;
+	 * the viewer's own toggle wins from then on. */
 	let width = $state(0);
 	let creditsToggled = $state<boolean | null>(null);
-	const creditsOpen = $derived(creditsToggled ?? width > 640);
+	let autoFolded = $state(false);
+	let foldTimer: ReturnType<typeof setTimeout> | 0 = 0;
+	const creditsOpen = $derived(creditsToggled ?? (width > 640 || !autoFolded));
 	let loading = $state(true);
 
 	let three: typeof THREE_NS | null = null;
@@ -174,6 +178,7 @@
 		return fovY / Math.max(1, host.clientHeight);
 	}
 	function onpointerdown(e: PointerEvent) {
+		autoFolded = true;
 		host.setPointerCapture(e.pointerId);
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 		pinch = null;
@@ -216,6 +221,7 @@
 			three = THREE;
 			layers = earth;
 			credits = earth.credits;
+			foldTimer = setTimeout(() => (autoFolded = true), 5000);
 			({ renderer, depthMode } = createWorldRenderer(THREE, { reversed: true }));
 			scratch = new THREE.Vector3();
 			renderer.domElement.dataset.testid = `${testid}-canvas`;
@@ -268,6 +274,7 @@
 		abort.abort();
 		if (raf) cancelAnimationFrame(raf);
 		if (retry) clearTimeout(retry);
+		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
 		requests.dispose();
 		observer?.disconnect();
@@ -306,7 +313,7 @@
 	{#if credits.length}
 		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button
 			 under that capture never gets its click -->
-		<div class="credits" role="contentinfo" data-testid="{testid}-credits" data-open={creditsOpen} onpointerdown={(e) => e.stopPropagation()}>
+		<div class="credits" role="note" data-testid="{testid}-credits" data-open={creditsOpen} onpointerdown={(e) => e.stopPropagation()}>
 			<button type="button" class="credits-toggle" aria-expanded={creditsOpen} title={creditsOpen ? 'Hide credits' : 'Credits'}
 				data-testid="{testid}-credits-toggle" onclick={() => (creditsToggled = !creditsOpen)}>ⓘ</button>
 			{#if creditsOpen}
