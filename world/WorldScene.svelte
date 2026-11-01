@@ -246,6 +246,8 @@
 				budgetMiB: atlasBudgetMiB, onChange: () => draw() });
 			await cloud.open();
 			if (destroyed) { cloud.dispose(); return; }
+			// a re-layout during the open went by while atlas was null: place the cloud in today's frame
+			cloud.setScene(frame!);
 			atlas = cloud;
 			scene.add(cloud.object);
 			atlasOpened = 'open';
