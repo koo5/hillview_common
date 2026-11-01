@@ -39,14 +39,22 @@ async function json<T>(f: typeof fetch, url: string, signal?: AbortSignal): Prom
 	return (await r.json()) as T;
 }
 
+const root = (base: string) => base.replace(/\/+$/, '');
+
+/** A channel's pointer: which snapshot it names (what a version picker labels). */
+export async function loadPointer(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}):
+	Promise<AtlasPointer> {
+	const pointer = await json<AtlasPointer>(opts.fetch ?? fetch, `${root(base)}/${encodeURIComponent(channel)}.json`, opts.signal);
+	if (pointer.schema !== 1 || !/^[0-9a-f]{16}$/.test(pointer.key) || pointer.path !== `w/${pointer.resolution}/${pointer.key}/`)
+		throw new Error(`atlas: ${channel}.json is not a schema-1 pointer at its own key`);
+	return pointer;
+}
+
 /** A channel's current snapshot: its pointer, its version record and the URLs of its files. */
 export async function loadAtlas(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<Atlas> {
 	const f = opts.fetch ?? fetch;
-	const root = base.replace(/\/+$/, '');
-	const pointer = await json<AtlasPointer>(f, `${root}/${encodeURIComponent(channel)}.json`, opts.signal);
-	if (pointer.schema !== 1 || !/^[0-9a-f]{16}$/.test(pointer.key) || pointer.path !== `w/${pointer.resolution}/${pointer.key}/`)
-		throw new Error(`atlas: ${channel}.json is not a schema-1 pointer at its own key`);
-	const folder = `${root}/${pointer.path}`;
+	const pointer = await loadPointer(base, channel, opts);
+	const folder = `${root(base)}/${pointer.path}`;
 	const version = await json<AtlasVersion>(f, `${folder}version.json`, opts.signal);
 	if (version.schema !== 1 || version.key !== pointer.key || version.resolution !== pointer.resolution)
 		throw new Error(`atlas: ${folder}version.json describes another version`);

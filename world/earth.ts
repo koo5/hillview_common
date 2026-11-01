@@ -12,16 +12,25 @@ export type TerrainModel = 'surface' | 'bare';
 
 export type Credit = { text: string; url: string; licence: string; terms_url?: string };
 
-export type EarthLayers = {
+/** a channel as read: everything the scene needs to address its layers and credit them, whichever are shown */
+export type Earth = {
+	base: string;
 	releases: Releases;
+	sources: Record<string, Source>;
+	/** the ortho release's year, as ČÚZK's terms want it shown; null without an ortho release */
+	orthoYear: string | null;
+};
+
+/** what a scene draws of earth's layers: the terrain model always, the rest only where the channel has them */
+export type EarthLayers = {
 	/** terrainTiles' tileUrl: {z}/{x}/{y} */
 	tileUrl: string;
 	/** terrainTiles' orthoUrl, when the channel has an ortho release */
 	orthoUrl?: string;
 	/** OSM vector tiles (footprintTiles), when the channel has them */
 	osmUrl?: string;
-	/** what a view drawing these layers names, in that order */
-	credits: Credit[];
+	/** the city models' manifest (cityModelTiles), when the channel has a models release */
+	modelsUrl?: string;
 };
 
 type Source = { text: string; url: string; licence: string; terms_url?: string };
@@ -40,47 +49,56 @@ async function json<T>(f: typeof fetch, url: string, signal?: AbortSignal): Prom
 }
 
 /** the tile URLs of one set of releases (no requests) */
-export function layerUrls(earth: string, releases: Releases, model: TerrainModel = 'surface'):
-	Pick<EarthLayers, 'tileUrl' | 'orthoUrl' | 'osmUrl'> {
+export function layerUrls(earth: string, releases: Releases, model: TerrainModel): EarthLayers {
 	const b = base(earth);
 	if (!releases.terrain) throw new Error('earth: the channel has no terrain release');
 	return {
 		tileUrl: `${b}/t/${releases.terrain}/terrain/${model}/{z}/{x}/{y}.q16`,
 		orthoUrl: releases.ortho ? `${b}/t/${releases.ortho}/ortho/{z}/{x}/{y}.jpg` : undefined,
-		osmUrl: releases.osm ? `${b}/t/${releases.osm}/osm/{z}/{x}/{y}.mvt` : undefined
+		osmUrl: releases.osm ? `${b}/t/${releases.osm}/osm/{z}/{x}/{y}.mvt` : undefined,
+		modelsUrl: releases.models ? `${b}/t/${releases.models}/models/manifest.json` : undefined
 	};
 }
 
-/** the credit lines for the layers drawn: the terrain's sources, then the orthophoto with its year */
-export function credits(sources: Record<string, Source>, orthoYear: string | null): Credit[] {
+/** the credit lines for the layers drawn: the terrain's sources, then the orthophoto with its year (`orthoYear` null
+ * while it is not drawn), then IPR's buildings while they are */
+export function credits(sources: Record<string, Source>, orthoYear: string | null, models = false): Credit[] {
 	const out: Credit[] = [];
-	for (const key of TERRAIN_SOURCES) {
+	const source = (key: string) => {
 		const s = sources[key];
 		if (!s) throw new Error(`earth: /attribution has no ${key}`);
+		return s;
+	};
+	for (const key of TERRAIN_SOURCES) {
+		const s = source(key);
 		out.push({ text: s.text, url: s.url, licence: s.licence });
 	}
 	if (orthoYear !== null) {
-		const s = sources['cuzk-ortho'];
-		if (!s) throw new Error('earth: /attribution has no cuzk-ortho');
+		const s = source('cuzk-ortho');
 		out.push({ text: s.text.replace('{year}', orthoYear), url: s.url, licence: s.licence, terms_url: s.terms_url });
+	}
+	if (models) {
+		const s = source('ipr');
+		out.push({ text: s.text, url: s.url, licence: s.licence, terms_url: s.terms_url });
 	}
 	return out;
 }
 
-/** a channel's releases, tile URLs and credits: three small cached reads */
-export async function loadEarth(earth: string, channel: string, opts: { model?: TerrainModel; fetch?: typeof fetch;
-	signal?: AbortSignal } = {}): Promise<EarthLayers> {
+/** a channel's releases, sources and the ortho year: three small cached reads */
+export async function loadEarth(earth: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}):
+	Promise<Earth> {
 	const f = opts.fetch ?? fetch;
 	const b = base(earth);
 	const [ch, attribution] = await Promise.all([
 		json<{ releases: Releases }>(f, `${b}/channels/${encodeURIComponent(channel)}`, opts.signal),
 		json<{ sources: Record<string, Source> }>(f, `${b}/attribution`, opts.signal)
 	]);
-	let year: string | null = null;
+	if (!ch.releases.terrain) throw new Error(`earth: channel ${channel} has no terrain release`);
+	let orthoYear: string | null = null;
 	if (ch.releases.ortho) {
 		const r = await json<{ sources?: { year?: string } }>(f, `${b}/releases/${encodeURIComponent(ch.releases.ortho)}`, opts.signal);
-		year = r.sources?.year ?? null;
-		if (year === null) throw new Error(`earth: ortho release ${ch.releases.ortho} names no year (ČÚZK's terms need it shown)`);
+		orthoYear = r.sources?.year ?? null;
+		if (orthoYear === null) throw new Error(`earth: ortho release ${ch.releases.ortho} names no year (ČÚZK's terms need it shown)`);
 	}
-	return { releases: ch.releases, ...layerUrls(b, ch.releases, opts.model), credits: credits(attribution.sources, year) };
+	return { base: b, releases: ch.releases, sources: attribution.sources, orthoYear };
 }
