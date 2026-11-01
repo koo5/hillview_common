@@ -5,9 +5,12 @@
 	 * a pointer that goes down on it, and a control under that capture never gets its click.
 	 */
 	import type { SceneLayers } from './sceneLayers';
+	import { FLY_LAYOUTS, type FlyLayout } from './flight';
 
-	let { layers = $bindable(), ortho, buildings, atlas, testid }: {
+	let { layers = $bindable(), flyLayout = $bindable(), ortho, buildings, atlas, testid }: {
 		layers: SceneLayers;
+		/** which labels the flight keys go by (the keys themselves are physical) */
+		flyLayout: FlyLayout;
 		/** the channel has an orthophoto */
 		ortho: boolean;
 		/** the channel has city models */
@@ -54,6 +57,15 @@
 					<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" /> Prague 3D buildings</label>
 				</fieldset>
 			{/if}
+			<fieldset class="fly">
+				<legend>Fly</legend>
+				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS[flyLayout].label}</p>
+				<div class="layouts">
+					{#each Object.keys(FLY_LAYOUTS) as l (l)}
+						<label><input type="radio" bind:group={flyLayout} value={l} data-testid="{testid}-fly-{l}" /> {l}</label>
+					{/each}
+				</div>
+			</fieldset>
 			{#if atlas.length}
 				<fieldset>
 					<legend>Point cloud</legend>
@@ -119,6 +131,16 @@
 		font-weight: 600;
 		font-size: 12px;
 		color: #4a5a6c;
+	}
+	.fly p {
+		max-width: 16em;
+		margin: 2px 0;
+		color: #4a5a6c;
+		font-size: 12px;
+	}
+	.layouts {
+		display: flex;
+		gap: 12px;
 	}
 	label {
 		display: flex;

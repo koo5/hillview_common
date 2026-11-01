@@ -11,10 +11,19 @@
 	 * What is drawn is the viewer's choice (ea07, sceneLayers.ts): bare or surface ground, the orthophoto, IPR's
 	 * buildings, an atlas version or none, chosen in WorldSceneControls and kept per viewer under `layersKey`. Every
 	 * layer asks through one WorldRequests, which the loading overlay (WorldRequestPanel) reads.
+	 *
+	 * FLIGHT (ea07, flight.ts): with the scene focused, a fly key frees the camera from the app's location and flies it
+	 * as the workbench's viewer does. While it flies, its ground point and heading are written back (`onmove`,
+	 * `onlook`), so the app's map follows; the app's location coming back as that same point is flight's own echo. A
+	 * move the scene did not make -- the map dragged, a photo chosen -- lands it: the observer stands at the eye height
+	 * over the new point, as before flight. Esc or the Land button lands it where it is.
 	 */
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import type * as THREE_NS from 'three';
-	import { Frame, type Vec3 } from './geodesy';
+	import { Frame, rigid, type Vec3 } from './geodesy';
+	import { headingOf, localAxes } from './compass';
+	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
+		savedFlyLayout, savedFlySpeed, zoomedFov, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { TerrainTiles, horizonM } from './terrainTiles';
 	import { createWorldRenderer, type DepthMode } from './renderer';
@@ -42,6 +51,8 @@
 		/** a drag turned the view: the bearing and pitch now shown */
 		onlook?: (look: { bearing: number; pitch: number }) => void;
 		oneye?: (eyeM: number) => void;
+		/** flight moved the observer: the ground point under it now (the app's location follows) */
+		onmove?: (at: { lat: number; lon: number }) => void;
 		/** a published atlas (atlas.hillview.cz): a channel's world snapshot is drawn as points */
 		atlasUrl?: string;
 		/** the atlas channels a viewer may choose between, the default first */
@@ -53,7 +64,7 @@
 	};
 	let {
 		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55,
-		onlook, oneye, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
+		onlook, oneye, onmove, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
 		testid = 'world-scene'
 	}: Props = $props();
 
@@ -68,15 +79,15 @@
 			return null;
 		}
 	}
-	let layers = $state<SceneLayers>(untrack(() => readLayers(saved(layersKey), atlasChannels)));
-	$effect(() => {
-		const value = JSON.stringify(layers);
+	function keep(key: string, value: string) {
 		try {
-			localStorage.setItem(layersKey, value);
+			localStorage.setItem(key, value);
 		} catch {
 			/* preferences unavailable: the choice lasts this visit */
 		}
-	});
+	}
+	let layers = $state<SceneLayers>(untrack(() => readLayers(saved(layersKey), atlasChannels)));
+	$effect(() => keep(layersKey, JSON.stringify(layers)));
 
 	let host: HTMLDivElement;
 	let error = $state<string | null>(null);
@@ -143,7 +154,14 @@
 			const [e, n] = frame.fromGeodetic(lat, lon, 0);
 			if (Math.hypot(e, n) < REFRAME_M) return;
 		}
-		frame = new Frame(lat, lon, 0);
+		const next = new Frame(lat, lon, 0);
+		if (flying && frame && camera) {
+			// the flown camera, carried into the new frame (the frames' axes differ by the earth's curve between them)
+			camera.updateMatrix();
+			new three.Matrix4().set(...(rigid(frame, next) as Parameters<THREE_NS.Matrix4['set']>)).multiply(camera.matrix)
+				.decompose(camera.position, camera.quaternion, camera.scale);
+		}
+		frame = next;
 		atlas?.setScene(frame);
 	}
 
@@ -185,19 +203,87 @@
 		}, (e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
 	});
 
+	// ---- flight ----
+	const flyKeys = new FlyKeys(savedFlyLayout(saved(FLY_LAYOUT_PREF)));
+	let flyLayout = $state<FlyLayout>(flyKeys.layout);
+	$effect(() => {
+		flyKeys.layout = flyLayout;
+		keep(FLY_LAYOUT_PREF, flyLayout);
+	});
+	let flySpeed = $state(savedFlySpeed(saved(FLY_SPEED_PREF)));
+	let flight: Flight | null = null;
+	let flying = $state(false);
+	let flyFrame = 0, flyT = 0;
+	/** the ground point flight last wrote, and when: the app's location coming back as this point is its own echo */
+	let sentAt: [number, number] | null = null, sentT = 0;
+	/** the camera's height over the ground while it flies (the eye height's stand-in for the far plane) */
+	let flownEyeM = 0;
+	/** Z/X narrowed or widened the view */
+	let zoom = $state<number | null>(null);
+	const fov = $derived(zoom ?? fovY);
+	const ECHO_M = 1, REPORT_MS = 300;
+
+	function takeOff() {
+		if (!flight || !camera) return;
+		flying = true;
+		if (!flyFrame) flyFrame = requestAnimationFrame(fly);
+	}
+	function fly(t: number) {
+		flyFrame = 0;
+		if (!flying || !flight || !camera || destroyed) return;
+		const dt = flyT ? Math.min(0.1, (t - flyT) / 1000) : 0;
+		flyT = t;
+		flight.speed = flySpeed;
+		const moving = flight.step(camera, dt);
+		report(!moving);
+		render();
+		if (moving) flyFrame = requestAnimationFrame(fly);
+		else flyT = 0;
+	}
+	/** where flight has the observer, written back (at most every REPORT_MS, and once it comes to rest) */
+	function report(now: boolean) {
+		if (!frame || !camera || (!now && performance.now() - sentT < REPORT_MS)) return;
+		const p = camera.position.toArray() as Vec3;
+		const [la, lo, h] = frame.toGeodetic(...p);
+		const g = terrain?.heightAt(la, lo);
+		if (g != null) flownEyeM = Math.max(0, h - g);
+		const look = headingOf(camera.getWorldDirection(new three!.Vector3()).toArray() as Vec3, localAxes(frame, p));
+		sentAt = [la, lo];
+		sentT = performance.now();
+		onmove?.({ lat: la, lon: lo });
+		onlook?.(look);
+	}
+	/** back to the observer: standing at the eye height over the app's location */
+	function land() {
+		flying = false;
+		flight?.stop();
+		if (flyFrame) cancelAnimationFrame(flyFrame);
+		flyFrame = flyT = 0;
+		sentAt = null;
+		draw();
+	}
+	/** the app's location is flight's own last report, not a move of the app's */
+	function isEcho(la: number, lo: number): boolean {
+		if (!sentAt || !frame) return false;
+		const a = frame.fromGeodetic(la, lo, 0), b = frame.fromGeodetic(sentAt[0], sentAt[1], 0);
+		return Math.hypot(a[0] - b[0], a[1] - b[1]) < ECHO_M;
+	}
+
 	function render() {
 		raf = 0;
 		if (!renderer || !scene || !camera || !frame || !terrain) return;
-		ground = terrain.heightAt(lat, lon) ?? ground;
-		const h = (ground ?? 0) + eyeM;
-		const cam = frame.fromGeodetic(lat, lon, h);
-		const d = direction(bearing, pitch);
-		camera.position.set(...cam);
-		camera.up.set(0, 0, 1);
-		camera.lookAt(cam[0] + d[0], cam[1] + d[1], cam[2] + d[2]);
-		camera.fov = fovY;
+		if (!flying) {
+			ground = terrain.heightAt(lat, lon) ?? ground;
+			const at = frame.fromGeodetic(lat, lon, (ground ?? 0) + eyeM);
+			const d = direction(bearing, pitch);
+			camera.position.set(...at);
+			camera.up.set(0, 0, 1);
+			camera.lookAt(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
+		}
+		const cam = camera.position.toArray() as Vec3;
+		camera.fov = fov;
 		camera.near = depthMode === 'reversed' ? 0.05 : 0.5;
-		camera.far = Math.max(5_000, horizonM(eyeM) * 1.5 + 50_000);
+		camera.far = Math.max(5_000, horizonM(flying ? flownEyeM : eyeM) * 1.5 + 50_000);
 		camera.updateProjectionMatrix();
 		const v = cameraView(camera, scratch!, host.clientHeight || 800);
 		const ask = gate.state(cam, v, performance.now());
@@ -225,10 +311,13 @@
 		if (!raf && !destroyed) raf = requestAnimationFrame(render);
 	}
 
-	// a move of the observer (the app's location state) or of the view
+	// a move of the observer (the app's location state) or of the view; one flight did not make lands it
 	$effect(() => {
-		void lat; void lon; void bearing; void pitch; void eyeM; void fovY;
-		ensureFrame();
+		void lat; void lon; void bearing; void pitch; void eyeM; void fov;
+		untrack(() => {
+			if (flying && !isEcho(lat, lon)) land();
+			ensureFrame();
+		});
 		draw();
 	});
 
@@ -246,10 +335,12 @@
 	let pinch: number | null = null;
 
 	function degPerPx() {
-		return fovY / Math.max(1, host.clientHeight);
+		return fov / Math.max(1, host.clientHeight);
 	}
 	function onpointerdown(e: PointerEvent) {
 		autoFolded = true;
+		// the keys fly only while the scene has focus, so the app's own shortcuts keep theirs
+		host.focus({ preventScroll: true });
 		host.setPointerCapture(e.pointerId);
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 		pinch = null;
@@ -259,6 +350,7 @@
 		if (!last) return;
 		if (pointers.size === 2) {
 			pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+			if (flying) return;
 			const [a, b] = [...pointers.values()];
 			const d = Math.hypot(a.x - b.x, a.y - b.y);
 			if (pinch !== null && d > 0) raise(pinch / d);
@@ -266,9 +358,17 @@
 			return;
 		}
 		const k = degPerPx();
-		const nb = (((bearing - (e.clientX - last.x) * k) % 360) + 360) % 360;
-		const np = Math.max(-89, Math.min(89, pitch + (e.clientY - last.y) * k));
+		const dx = e.clientX - last.x, dy = e.clientY - last.y;
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+		if (flying && flight && camera) {
+			// the drag grabs the view as on the ground: the same angle per pixel, turned the way the hand moves
+			const px = (k * Math.PI) / 180 / (LOOK_RAD_PER_PX * lookScale(camera));
+			flight.look(-dx * px, -dy * px);
+			takeOff();
+			return;
+		}
+		const nb = (((bearing - dx * k) % 360) + 360) % 360;
+		const np = Math.max(-89, Math.min(89, pitch + dy * k));
 		onlook?.({ bearing: nb, pitch: np });
 	}
 	function onpointerup(e: PointerEvent) {
@@ -281,7 +381,36 @@
 	}
 	function onwheel(e: WheelEvent) {
 		e.preventDefault();
-		raise(Math.exp(e.deltaY * 0.002));
+		if (!flying) return raise(Math.exp(e.deltaY * 0.002));
+		// in flight the wheel sets the speed, as in the workbench's
+		if (e.deltaY) {
+			flySpeed = boundedFlySpeed(flySpeed * (e.deltaY < 0 ? 1.25 : 0.8));
+			keep(FLY_SPEED_PREF, String(flySpeed));
+		}
+	}
+	function onkeydown(e: KeyboardEvent) {
+		if (keyBelongsToControl(e, false) || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (e.code === 'Escape' && flying) {
+			land();
+			e.preventDefault();
+			return;
+		}
+		const z = zoomedFov(fov, e.code);
+		if (z !== null) {
+			zoom = z;
+			e.preventDefault();
+			return;
+		}
+		if (flyKeys.press(e.code)) {
+			e.preventDefault();
+			takeOff();
+		}
+	}
+	function onkeyup(e: KeyboardEvent) {
+		flyKeys.release(e.code);
+	}
+	function onfocusout(e: FocusEvent) {
+		if (!host.contains(e.relatedTarget as Node | null)) flyKeys.clear();
 	}
 
 	let observer: ResizeObserver | null = null;
@@ -293,6 +422,7 @@
 			three = THREE;
 			({ renderer, depthMode } = createWorldRenderer(THREE, { reversed: true }));
 			scratch = new THREE.Vector3();
+			flight = new Flight(THREE, flyKeys, flySpeed);
 			renderer.domElement.dataset.testid = `${testid}-canvas`;
 			host.prepend(renderer.domElement);
 			scene = new THREE.Scene();
@@ -370,6 +500,7 @@
 		destroyed = true;
 		abort.abort();
 		if (raf) cancelAnimationFrame(raf);
+		if (flyFrame) cancelAnimationFrame(flyFrame);
 		if (retry) clearTimeout(retry);
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
@@ -382,6 +513,9 @@
 	});
 </script>
 
+<!-- role="application" is ARIA's role for a widget that takes its own pointer and keys (here: look, rise, fly);
+	 svelte's list counts it non-interactive -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
 	class="world-scene"
 	bind:this={host}
@@ -398,8 +532,13 @@
 	{onpointerup}
 	onpointercancel={onpointerup}
 	{onwheel}
+	{onkeydown}
+	{onkeyup}
+	{onfocusout}
+	tabindex="0"
+	data-flying={flying}
 	role="application"
-	aria-label="3D world: drag to look around, scroll or pinch to rise"
+	aria-label="3D world: drag to look around, scroll or pinch to rise; click it, then fly with the keys"
 >
 	<!-- the loading overlay, as the workbench shows it; its own pointer and wheel, so its list scrolls and its controls
 		 click under the scene's capture -->
@@ -409,7 +548,13 @@
 			systemError={!!(error ?? atlasError)} />
 	</div>
 	{#if earth}
-		<WorldSceneControls bind:layers ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} atlas={atlasOptions} {testid} />
+		<WorldSceneControls bind:layers bind:flyLayout ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} atlas={atlasOptions} {testid} />
+	{/if}
+	{#if flying}
+		<div class="flight" role="status" data-testid="{testid}-flight" onpointerdown={(e) => e.stopPropagation()}>
+			<span>flying · {Number(flySpeed.toPrecision(3))} m/s · scroll for speed</span>
+			<button type="button" onclick={land} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
+		</div>
 	{/if}
 	{#if credits.length}
 		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button
@@ -435,6 +580,9 @@
 		touch-action: none;
 		background: #9ec3e6;
 	}
+	.world-scene:focus {
+		outline: none;
+	}
 	.world-scene :global(canvas) {
 		display: block;
 		width: 100%;
@@ -447,6 +595,28 @@
 		top: var(--world-scene-inset-top, 8px);
 		left: 8px;
 		right: 52px;
+	}
+	.flight {
+		position: absolute;
+		left: 8px;
+		bottom: calc(var(--world-scene-credits-bottom, 0px) + 28px);
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 4px 4px 10px;
+		border-radius: 16px;
+		background: rgba(19, 25, 35, 0.85);
+		color: #eee;
+		font: 12px system-ui, sans-serif;
+	}
+	.flight button {
+		padding: 3px 10px;
+		border: 0;
+		border-radius: 12px;
+		background: #eee;
+		color: #131923;
+		font: inherit;
+		cursor: pointer;
 	}
 	/* a host whose own UI overlaps the scene's corner moves the line clear with these two */
 	.credits {
