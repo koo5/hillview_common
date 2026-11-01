@@ -10,14 +10,26 @@
 	},
 	"peerDependencies": {
 		"svelte": "^5.55.0",
-		"three": "^0.185.0"
+		"three": "^0.185.0",
+		"copc": "^0.0.9",
+		"laz-perf": "^0.0.7"
 	},
 	"peerDependenciesMeta": {
-		"three": { "optional": true }
+		"three": {
+			"optional": true
+		},
+		"copc": {
+			"optional": true
+		},
+		"laz-perf": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@types/node": "24.6.2",
 		"@types/three": "0.185.1",
+		"copc": "0.0.9",
+		"laz-perf": "0.0.7",
 		"svelte": "5.56.4",
 		"svelte-check": "4.7.1",
 		"three": "0.185.1",
