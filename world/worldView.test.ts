@@ -1,5 +1,6 @@
 import {expect,test} from 'vitest';
-import {planWorldView,worldBatch} from './worldView';
+import * as THREE from 'three';
+import {cameraMeasure,planWorldView,worldBatch} from './worldView';
 import type {CopcNode} from './copcSource';
 const n=(key:string,depth:number):CopcNode=>({key,depth,bounds:[0,0,0,1,1,1],pointCount:100});
 test('near visible fine detail outranks distant shallow detail and off-screen overview',()=>{
@@ -23,4 +24,26 @@ test('early nearby batches stay separate; later tiny blocks coalesce within the 
  expect(worldBatch(199999,true)).toEqual({maxNodes:12,rawPoints:400000,separateNear:true});
  expect(worldBatch(200000,true)).toEqual({maxNodes:64,rawPoints:400000,separateNear:false});
  expect(worldBatch(5000000,true)).toEqual({maxNodes:64,rawPoints:2000000,separateNear:false});
+});
+
+
+const node=(key:string,bounds:[number,number,number,number,number,number]):CopcNode=>
+	({key,depth:2,bounds,pointCount:10} as unknown as CopcNode);
+
+test('the camera measure: in front and near is visible, behind is not, nearer spans more pixels',()=>{
+	const camera=new THREE.PerspectiveCamera(60,1,0.1,1000);
+	camera.position.set(0,0,0);camera.lookAt(0,10,0);camera.updateProjectionMatrix();
+	const {measure,nearGroups}=cameraMeasure(THREE,camera,[0,0,0],800,false);
+	const ahead=measure(node('ahead',[-1,9,-1,1,11,1]));
+	const far=measure(node('far',[-1,99,-1,1,101,1]));
+	const behind=measure(node('behind',[-1,-11,-1,1,-9,1]));
+	expect(ahead.visible).toBe(true);
+	expect(behind.visible).toBe(false);
+	expect(ahead.distance).toBeCloseTo(9);
+	expect(ahead.pixels).toBeGreaterThan(far.pixels);
+	expect(nearGroups.get('ahead')).toBe(3);
+	expect(nearGroups.get('behind')).toBe(-1);
+	// the offset carries the tree's file coordinates into the scene
+	const shifted=cameraMeasure(THREE,camera,[0,-100,0],800,false).measure(node('shifted',[-1,99,-1,1,101,1]));
+	expect(shifted.distance).toBeLessThan(1.5);
 });
