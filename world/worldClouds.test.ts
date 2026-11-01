@@ -48,3 +48,14 @@ test('stored and full manifests cannot substitute for each other',()=>{
  expect(()=>worldCloudCounts(manifest(),key,['a','b'],'stored')).toThrow();
  expect(()=>worldCloudCounts({...stored,runs:manifest().runs},key,['a','b'],'stored')).toThrow();
 });
+
+test('a nearest-ownership world draws the kept part and checks the full stream against owned_from',()=>{
+ const value={...manifest(),overlap:'nearest',runs:manifest().runs.map(r=>({...r,dense:r.dense?150:0,owned_from:r.dense}))};
+ expect(worldCloudCounts(value,key,['a','b']).get('a')).toEqual({dense:150,sparse:0,resolution:resolution(true,200,0),owned_from:200});
+ for(const bad of [{...value,overlap:'all'},{...value,overlap:'farthest'},
+  {...value,runs:value.runs.map(r=>({...r,owned_from:undefined}))},
+  {...value,runs:value.runs.map(({owned_from,...r})=>r)},
+  {...value,runs:value.runs.map(r=>({...r,owned_from:r.dense?100:0}))},
+  {...manifest(),runs:value.runs}])
+  expect(()=>worldCloudCounts(bad,key,['a','b'])).toThrow('rebuild');
+});
