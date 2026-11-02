@@ -65,17 +65,23 @@ test('keys are read by physical key, as the layout names them; only flight keys 
 });
 
 test('Z and X zoom in equal steps, within bounds; other keys are no zoom', () => {
-	const inOnce = zoomedFov(55, 'KeyZ', ZOOM_ZX)!;
+	const inOnce = zoomedFov(55, { code: 'KeyZ', key: 'z' }, ZOOM_ZX)!;
 	expect(inOnce).toBeLessThan(55);
-	expect(zoomedFov(inOnce, 'KeyX', ZOOM_ZX)).toBeCloseTo(55, 9);
-	expect(zoomedFov(0.1, 'KeyZ', ZOOM_ZX)).toBe(0.1);
-	expect(zoomedFov(119, 'KeyX', ZOOM_ZX)).toBe(120);
-	expect(zoomedFov(55, 'KeyW', ZOOM_ZX)).toBeNull();
-	// Hillview's scene: + (= unshifted, or the keypad's) and -; its Z and X are the app's, never a zoom
-	expect(zoomedFov(55, 'Equal', ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
-	expect(zoomedFov(55, 'NumpadAdd', ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
-	expect(zoomedFov(inOnce, 'Minus', ZOOM_PLUS_MINUS)).toBeCloseTo(55, 9);
-	expect(zoomedFov(55, 'KeyZ', ZOOM_PLUS_MINUS)).toBeNull();
+	expect(zoomedFov(inOnce, { code: 'KeyX', key: 'x' }, ZOOM_ZX)).toBeCloseTo(55, 9);
+	expect(zoomedFov(0.1, { code: 'KeyZ', key: 'z' }, ZOOM_ZX)).toBe(0.1);
+	expect(zoomedFov(119, { code: 'KeyX', key: 'x' }, ZOOM_ZX)).toBe(120);
+	expect(zoomedFov(55, { code: 'KeyW', key: 'w' }, ZOOM_ZX)).toBeNull();
+	// ZOOM_ZX is a position: a German Z position types y and still zooms
+	expect(zoomedFov(55, { code: 'KeyZ', key: 'y' }, ZOOM_ZX)).toBeCloseTo(inOnce, 9);
+	// Hillview's scene goes by the character: + or = (the keypad's types +) narrows, - widens; its Z and X are the app's
+	expect(zoomedFov(55, { code: 'Equal', key: '=' }, ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
+	expect(zoomedFov(55, { code: 'NumpadAdd', key: '+' }, ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
+	expect(zoomedFov(inOnce, { code: 'Minus', key: '-' }, ZOOM_PLUS_MINUS)).toBeCloseTo(55, 9);
+	expect(zoomedFov(55, { code: 'KeyZ', key: 'z' }, ZOOM_PLUS_MINUS)).toBeNull();
+	// Czech QWERTZ: + is on Digit1, and the Equal position types the dead key ´
+	expect(zoomedFov(55, { code: 'Digit1', key: '+' }, ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
+	expect(zoomedFov(55, { code: 'Equal', key: '´' }, ZOOM_PLUS_MINUS)).toBeNull();
+	expect(zoomedFov(55, { code: 'Equal', key: 'Dead' }, ZOOM_PLUS_MINUS)).toBeNull();
 });
 
 test('a flight moves the camera along its own axes and comes to rest when the keys are let go', async () => {

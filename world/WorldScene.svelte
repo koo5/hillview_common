@@ -497,7 +497,7 @@
 			e.preventDefault();
 			return;
 		}
-		const z = zoomedFov(fov, e.code, ZOOM_PLUS_MINUS);
+		const z = zoomedFov(fov, e, ZOOM_PLUS_MINUS);
 		if (z !== null) {
 			zoom = z;
 			e.preventDefault();

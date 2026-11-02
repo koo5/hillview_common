@@ -75,15 +75,19 @@ export function savedFlyLayout(value: string | null): FlyLayout {
  * view to a photo, so its scene zooms on + (=) and -, the keys its map zooms on when the map has focus (the
  * operator, 2026-11-02).
  */
-export type ZoomKeys = { narrow: readonly string[]; widen: readonly string[]; label: string };
-export const ZOOM_ZX: ZoomKeys = { narrow: ['KeyZ'], widen: ['KeyX'], label: 'Z/X zoom' };
-export const ZOOM_PLUS_MINUS: ZoomKeys = { narrow: ['Equal', 'NumpadAdd'], widen: ['Minus', 'NumpadSubtract'], label: '+/− zoom' };
+export type ZoomKeys = { by: 'code' | 'key'; narrow: readonly string[]; widen: readonly string[]; label: string };
+/** a position, like the flight keys (e.code) */
+export const ZOOM_ZX: ZoomKeys = { by: 'code', narrow: ['KeyZ'], widen: ['KeyX'], label: 'Z/X zoom' };
+/** the characters, as Hillview's own shortcuts are (e.key): on a Czech QWERTZ the Equal position types ´ and + is
+ * on Digit1 (RECON-UI, 11-02); the keypad's keys type + and - too */
+export const ZOOM_PLUS_MINUS: ZoomKeys = { by: 'key', narrow: ['+', '='], widen: ['-'], label: '+/− zoom' };
 
 /** A narrowing key narrows the view, a widening one widens it, in equal steps even at very narrow fields of view;
  * null for any other key */
-export function zoomedFov(fovDeg: number, code: string, keys: ZoomKeys): number | null {
-	const narrow = keys.narrow.includes(code);
-	if (!narrow && !keys.widen.includes(code)) return null;
+export function zoomedFov(fovDeg: number, e: { code: string; key: string }, keys: ZoomKeys): number | null {
+	const k = keys.by === 'key' ? e.key : e.code;
+	const narrow = keys.narrow.includes(k);
+	if (!narrow && !keys.widen.includes(k)) return null;
 	const scale = narrow ? 1 / 1.1 : 1.1;
 	const fov = (2 * Math.atan(Math.tan((fovDeg * Math.PI) / 360) * scale) * 180) / Math.PI;
 	return Math.max(0.1, Math.min(120, fov));
