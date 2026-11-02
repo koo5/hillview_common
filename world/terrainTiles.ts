@@ -309,31 +309,45 @@ function clipPolygon<T extends number[]>(poly: T[], side: (p: T) => number): T[]
 }
 
 /**
- * How big a tile's ground is on screen: the square root of the screen area its four corners (at height h) cover, in
- * pixels, seen as `view` sees from `cam` -- the quad clipped at the camera's near plane and then to the screen. A far
- * tile seen from the ground is wide and a few pixels tall, and its area says so; one beside or behind the camera
- * counts only the part on screen (0 for none).
+ * How big a photo a tile needs, in pixels a side: the screen area its ground quad (at height h) covers as `view` sees
+ * from `cam`, scaled up to the whole tile by the part of it that is in view -- a tile partly on screen still drapes
+ * all of its photo, at the scale of the part shown (RECON-UI). The quad is clipped in camera space against the view's
+ * five planes (Sutherland-Hodgman); a far tile seen from the ground is wide and a few pixels tall, and its area says
+ * so; 0 for a tile wholly out of view.
  */
 export function screenSizePx(frame: Frame, cam: Vec3, view: View, z: number, x: number, y: number, h: number): number {
 	const f = normalize(view.dir);
 	let r = normalize([f[1], -f[0], 0]);
 	if (!Number.isFinite(r[0]) || Math.hypot(...r) < 0.5) r = [1, 0, 0];
 	const u: Vec3 = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
-	const k = pxPerRad(view), hy = view.heightPx / 2, hx = hy * view.aspect;
+	const k = pxPerRad(view), ty = view.heightPx / 2 / k, tx = ty * view.aspect;
 	const b = tileLonLat(z, x, y);
 	// camera space: right, up, forward
-	let poly: number[][] = [[b.s, b.w], [b.s, b.e], [b.n, b.e], [b.n, b.w]].map(([la, lo]) => {
+	const quad: number[][] = [[b.s, b.w], [b.s, b.e], [b.n, b.e], [b.n, b.w]].map(([la, lo]) => {
 		const p = frame.fromGeodetic(la, lo, h);
 		const q = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
 		return [q[0] * r[0] + q[1] * r[1] + q[2] * r[2], q[0] * u[0] + q[1] * u[1] + q[2] * u[2], q[0] * f[0] + q[1] * f[1] + q[2] * f[2]];
 	});
-	poly = clipPolygon(poly, (p) => p[2] - 0.5);
-	let px = poly.map(([a, c, d]) => [(a / d) * k, (c / d) * k]);
-	for (const [axis, sign, lim] of [[0, 1, hx], [0, -1, hx], [1, 1, hy], [1, -1, hy]] as const)
-		px = clipPolygon(px, (p) => lim - sign * p[axis]);
-	let area = 0;
-	for (let i = 0; i < px.length; i++) area += px[i][0] * px[(i + 1) % px.length][1] - px[(i + 1) % px.length][0] * px[i][1];
-	return Math.sqrt(Math.abs(area) / 2);
+	let seen = clipPolygon(quad, (p) => p[2] - 0.5);
+	for (const side of [(p: number[]) => tx * p[2] - p[0], (p: number[]) => tx * p[2] + p[0],
+		(p: number[]) => ty * p[2] - p[1], (p: number[]) => ty * p[2] + p[1]]) seen = clipPolygon(seen, side);
+	if (seen.length < 3) return 0;
+	const whole = area3(quad), part = area3(seen);
+	if (!(whole > 0) || !(part > 0)) return 0;
+	const px = seen.map(([a, c, d]) => [(a / d) * k, (c / d) * k]);
+	let screen = 0;
+	for (let i = 0; i < px.length; i++) screen += px[i][0] * px[(i + 1) % px.length][1] - px[(i + 1) % px.length][0] * px[i][1];
+	return Math.sqrt((Math.abs(screen) / 2) * (whole / part));
+}
+
+/** a planar polygon's area in 3D */
+function area3(poly: number[][]): number {
+	let cx = 0, cy = 0, cz = 0;
+	for (let i = 0; i < poly.length; i++) {
+		const a = poly[i], b = poly[(i + 1) % poly.length];
+		cx += a[1] * b[2] - a[2] * b[1]; cy += a[2] * b[0] - a[0] * b[2]; cz += a[0] * b[1] - a[1] * b[0];
+	}
+	return Math.hypot(cx, cy, cz) / 2;
 }
 
 export function inFrustum(pts: Vec3[], cam: Vec3, view: View): boolean {

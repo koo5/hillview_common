@@ -189,8 +189,7 @@ describe('terrain tiles', () => {
 		const view = { dir, fovY: 55, aspect: 1.6, heightPx: 800 };
 		const [nx, ny] = tileOf(frame.lat, frame.lon, 16);
 		const under = screenSizePx(frame, cam, view, 16, nx, ny, frame.h);                    // standing in it
-		expect(under).toBeGreaterThan(256);
-		expect(under).toBeLessThanOrEqual(Math.sqrt(800 * 1.6 * 800) + 1e-6);              // never more than the screen
+		expect(under).toBeGreaterThan(Math.sqrt(800 * 1.6 * 800));                         // its part on screen, scaled to the whole
 		const z = 13, [fx, fy] = tileOf(frame.lat + 0.2, frame.lon, z);                      // ~22 km north
 		const far = screenSizePx(frame, cam, view, z, fx, fy, frame.h);
 		expect(far).toBeGreaterThan(2);
