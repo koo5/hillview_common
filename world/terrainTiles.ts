@@ -54,6 +54,9 @@ export type TerrainOptions = {
 	orthoUrl?: string;
 	/** the finest ortho zoom to ask for (the mosaic at maxZ) */
 	orthoMaxZ?: number;
+	/** where the orthophoto has imagery, [w, s, e, n] degrees (earth's ortho release): a tile wholly outside asks for
+	 * none; unset, every tile asks */
+	orthoExtent?: [number, number, number, number];
 	onChange?: () => void;
 };
 
@@ -78,6 +81,9 @@ type Tile = {
 	used: number;
 	/** the orthophoto draped on it: none = there is none (404), so the height ramp stays */
 	ortho?: 'loading' | 'ready' | 'none';
+	/** the ortho zoom it was cut from, relative to its own (photoDz), and the request that brought it */
+	orthoDz?: number;
+	orthoId?: string;
 	tex?: THREE_NS.Texture;
 };
 
@@ -264,6 +270,53 @@ const GROUND_RANGE: [number, number] = [-100, 2_000];
  * Is a box of world-frame points inside the view's frustum (four side planes through the eye)?
  * Conservative: out only when every point is outside the same plane.
  */
+/**
+ * THE PHOTO FOLLOWS THE SCREEN (the operator, 2026-11-02: from Prague every horizon tile fetched its 256 px photo for
+ * a sliver a few pixels tall, 314 requests before the view settled). A tile as big on screen as a photo tile takes its
+ * own (or, at maxZ, a mosaic of finer ones); a smaller one is cut from a coarser photo tile, as many levels up as it is
+ * smaller, which its neighbours share: one zoom-14 photo colours 256 zoom-18 tiles. Under PHOTO_MIN_PX, or wholly
+ * behind the camera, none; a tile that grows on screen (a zoom, a step closer) asks again, finer.
+ */
+export const PHOTO_MIN_PX = 2;
+/** the coarsest photo zoom asked for: coarser is a few pixels of the whole country */
+const PHOTO_MIN_Z = 6;
+
+/** which zoom a tile's photo comes from, relative to the tile's own: > 0 a finer mosaic (at maxZ), < 0 a coarser tile
+ * it is cut from; null for no photo (too small on screen) */
+export function photoDz(z: number, sizePx: number, maxZ: number, orthoMaxZ: number): number | null {
+	if (sizePx < PHOTO_MIN_PX) return null;
+	if (sizePx >= 256) return z >= maxZ ? Math.max(0, Math.min(2, orthoMaxZ - z)) : 0;
+	return -Math.max(0, Math.min(z - PHOTO_MIN_Z, Math.ceil(Math.log2(256 / sizePx))));
+}
+
+/**
+ * How big a tile's ground is on screen: the square root of the area its four corners (at height h) cover, in pixels,
+ * seen as `view` sees from `cam` -- a far tile seen from the ground is wide but a few pixels tall, and its area says
+ * so. 0 when it lies wholly behind the camera (turned round, the next update asks again); Infinity when only part of
+ * it does (the camera stands in or beside it).
+ */
+export function screenSizePx(frame: Frame, cam: Vec3, view: View, z: number, x: number, y: number, h: number): number {
+	const f = normalize(view.dir);
+	let r = normalize([f[1], -f[0], 0]);
+	if (!Number.isFinite(r[0]) || Math.hypot(...r) < 0.5) r = [1, 0, 0];
+	const u: Vec3 = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+	const k = pxPerRad(view);
+	const b = tileLonLat(z, x, y);
+	const px: [number, number][] = [];
+	let behind = 0;
+	for (const [la, lo] of [[b.s, b.w], [b.s, b.e], [b.n, b.e], [b.n, b.w]]) {
+		const p = frame.fromGeodetic(la, lo, h);
+		const q = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
+		const d = q[0] * f[0] + q[1] * f[1] + q[2] * f[2];
+		if (d <= 1) { behind++; continue; }
+		px.push([((q[0] * r[0] + q[1] * r[1] + q[2] * r[2]) / d) * k, ((q[0] * u[0] + q[1] * u[1] + q[2] * u[2]) / d) * k]);
+	}
+	if (behind) return behind === 4 ? 0 : Infinity;
+	let area = 0;
+	for (let i = 0; i < 4; i++) area += px[i][0] * px[(i + 1) % 4][1] - px[(i + 1) % 4][0] * px[i][1];
+	return Math.sqrt(Math.abs(area) / 2);
+}
+
 export function inFrustum(pts: Vec3[], cam: Vec3, view: View): boolean {
 	const f = normalize(view.dir);
 	// right and up of the camera; the world's up is z (a camera looking straight down is
@@ -577,26 +630,63 @@ export function drapeOrtho(mesh: THREE_NS.Mesh, tex: THREE_NS.Texture) {
 }
 
 /**
- * The ortho tiles that cover terrain tile z/x/y at ortho zoom z + dz, drawn into one canvas
- * (256 << dz px, north up): a tile with none is left blank; null when none of them has any.
+ * Decoded photo tiles by URL, shared by the terrain tiles cut from them (a coarse one serves hundreds): one fetch and
+ * one decode each, the last PHOTO_CACHE kept. A failure is not kept: the next ask fetches again. A 404 is null.
+ */
+export class Photos {
+	private m = new Map<string, Promise<ImageBitmap | null>>();
+	get(url: string, requestId: string): Promise<ImageBitmap | null> {
+		let p = this.m.get(url);
+		if (p) {
+			this.m.delete(url);
+			this.m.set(url, p);
+			return p;
+		}
+		p = (async () => {
+			// not the asker's signal: another tile may wait on the same photo
+			const r = await fetch(url, { headers: requestHeaders(url, undefined, requestId) });
+			if (r.status === 404) return null;
+			// a 503 with Retry-After while its sheets download (earth's ortho): asked again after it, the ramp meanwhile
+			if (!r.ok) throw await failureOf(r);
+			return createImageBitmap(await r.blob());
+		})();
+		p.catch(() => { if (this.m.get(url) === p) this.m.delete(url); });
+		this.m.set(url, p);
+		while (this.m.size > PHOTO_CACHE) this.m.delete(this.m.keys().next().value!);
+		return p;
+	}
+	clear() { this.m.clear(); }
+}
+const PHOTO_CACHE = 128;
+
+/**
+ * Terrain tile z/x/y's photo from ortho zoom z + dz, in one canvas, north up: dz >= 0 the 4^dz tiles that cover it
+ * (256 << dz px); dz < 0 its part of the coarser tile it lies in (256 >> -dz px). A sub-tile with none is left blank;
+ * null when none has any.
  */
 export async function loadOrtho(url: string, z: number, x: number, y: number, dz: number,
-	signal: AbortSignal, requestId: string): Promise<HTMLCanvasElement | null> {
-	const k = 1 << dz, size = 256 * k;
+	signal: AbortSignal, requestId: string, photos: Photos): Promise<HTMLCanvasElement | null> {
+	const at = (zz: number, xx: number, yy: number) => url.replace('{z}', String(zz)).replace('{x}', String(xx)).replace('{y}', String(yy));
 	const canvas = document.createElement('canvas');
+	const ctx = () => canvas.getContext('2d')!;
+	if (dz < 0) {
+		const k = -dz, part = Math.max(1, 256 >> k), m = (1 << k) - 1;
+		const img = await photos.get(at(z - k, x >> k, y >> k), requestId);
+		signal.throwIfAborted();
+		if (!img) return null;
+		canvas.width = canvas.height = part;
+		ctx().drawImage(img, (x & m) * (256 / (1 << k)), (y & m) * (256 / (1 << k)), 256 / (1 << k), 256 / (1 << k), 0, 0, part, part);
+		return canvas;
+	}
+	const k = 1 << dz, size = 256 * k;
 	canvas.width = size; canvas.height = size;
-	const ctx = canvas.getContext('2d')!;
 	let drawn = 0;
 	await Promise.all(Array.from({ length: k * k }, async (_, i) => {
 		const cx = i % k, cy = Math.floor(i / k);
-		const u = url.replace('{z}', String(z + dz)).replace('{x}', String(x * k + cx)).replace('{y}', String(y * k + cy));
-		const r = await fetch(u, { signal, headers: requestHeaders(u, undefined, requestId) });
-		if (r.status === 404) return;
-		// a 503 with Retry-After while its sheets download (earth's ortho): asked again after it, the ramp meanwhile
-		if (!r.ok) throw await failureOf(r);
-		const img = await createImageBitmap(await r.blob());
-		ctx.drawImage(img, cx * 256, cy * 256, 256, 256);
-		img.close();
+		const img = await photos.get(at(z + dz, x * k + cx, y * k + cy), requestId);
+		signal.throwIfAborted();
+		if (!img) return;
+		ctx().drawImage(img, cx * 256, cy * 256, 256, 256);
 		drawn++;
 	}));
 	return drawn ? canvas : null;
@@ -646,6 +736,8 @@ export class TerrainTiles {
 	readonly group: THREE_NS.Group;
 	private tiles = new Map<TileKey, Tile>();
 	private wanted: TileKey[] = [];
+	/** where the last update looked from: which tiles are big enough on screen for a photo */
+	private looked: { cam: Vec3; view: View } | null = null;
 	private requests: WorldRequests;
 	private requestScope: string;
 	private ownsRequests: boolean;
@@ -655,8 +747,10 @@ export class TerrainTiles {
 	version = 0;
 	/** the earth under the tiles (buildGlobe) */
 	readonly globe?: THREE_NS.Mesh;
-	readonly o: Required<Omit<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl'>> & Pick<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl'>;
+	readonly o: Required<Omit<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl' | 'orthoExtent'>> &
+		Pick<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl' | 'orthoExtent'>;
 	private orthoScope: string;
+	private photos = new Photos();
 
 	constructor(private THREE: Three, opts: TerrainOptions) {
 		// 220, doubled when zoomed in (budgetFor). Raising it to 400 was tried (2026-10-02) on a
@@ -736,6 +830,7 @@ export class TerrainTiles {
 	update(cam: Vec3, view?: View) {
 		if (this.disposed) return;
 		this.tick++;
+		this.looked = view ? { cam, view } : null;
 		const sel = selectTiles(this.o.frame, cam, { ...this.o, maxTiles: budgetFor(this.o.maxTiles, view) }, view,
 			(z, x, y) => this.heightRange(z, x, y), (z, x, y) => this.dataRes(z, x, y));
 		this.wanted = sel.map(([z, x, y]) => `${z}/${x}/${y}` as TileKey);
@@ -747,6 +842,21 @@ export class TerrainTiles {
 		this.pump();
 		this.compose();
 		this.evict();
+	}
+
+	/** the photo zoom this tile wants now (photoDz), null for none: outside the photo's coverage, too small on screen */
+	private photoDzOf(t: Tile): number | null {
+		const ex = this.o.orthoExtent;
+		if (ex) {
+			const b = tileLonLat(t.z, t.x, t.y);
+			if (b.e <= ex[0] || ex[2] <= b.w || b.n <= ex[1] || ex[3] <= b.s) return null;
+		}
+		if (!this.looked || !t.h) return photoDz(t.z, 256, this.o.maxZ, this.o.orthoMaxZ);
+		let sum = 0, n = 0;
+		for (const v of t.h) if (Number.isFinite(v)) { sum += v; n++; }
+		if (!n) return null;
+		const px = screenSizePx(this.o.frame, this.looked.cam, this.looked.view, t.z, t.x, t.y, sum / n);
+		return photoDz(t.z, px, this.o.maxZ, this.o.orthoMaxZ);
 	}
 
 	private pump() {
@@ -793,42 +903,49 @@ export class TerrainTiles {
 		this.pumpOrtho();
 	}
 
-	/** the orthophoto for every wanted tile whose ground has loaded and which has no photo yet */
+	/** the orthophoto for every wanted tile whose ground has loaded, which has no photo yet, and which is big enough on
+	 * screen to show one (ORTHO_MIN_PX; a zoom-in makes a far tile big enough, and its photo comes then) */
 	private pumpOrtho() {
 		const url = this.o.orthoUrl;
 		if (!url) return;
-		const want = this.wanted.filter((k) => {
+		// a tile without its photo, or with one coarser than it now wants (it grew on screen)
+		const want: [Tile, number][] = [];
+		for (const k of this.wanted) {
 			const t = this.tiles.get(k);
-			return t?.state === 'ready' && t.mesh && t.ortho !== 'ready' && t.ortho !== 'none';
-		});
-		this.requests.reconcile(this.orthoScope, want.map((key, priority) => {
-			const t = this.tiles.get(key)!;
-			const { z, x, y } = t;
-			// finer than the terrain only where the terrain stops splitting
-			const dz = z >= this.o.maxZ ? Math.max(0, Math.min(2, this.o.orthoMaxZ - z)) : 0;
+			if (t?.state !== 'ready' || !t.mesh || t.ortho === 'none') continue;
+			const dz = this.photoDzOf(t);
+			if (dz !== null && (t.ortho !== 'ready' || dz > (t.orthoDz ?? -Infinity))) want.push([t, dz]);
+		}
+		this.requests.reconcile(this.orthoScope, want.map(([t, dz], priority) => {
+			const { z, x, y, key } = t;
+			// a finer photo is another request: a loaded one is never run again under its id
+			const id = `${key}@${dz}`;
+			const s = dz < 0 ? -dz : 0, d = dz > 0 ? dz : 0;
 			return {
-				id: key, label: `Orthophoto ${key}`, kind: 'ortho' as const,
-				url: url.replace('{z}', String(z + dz)).replace('{x}', String(x << dz)).replace('{y}', String(y << dz)),
+				id, label: `Orthophoto ${key}${dz ? ` (from z${z + dz})` : ''}`, kind: 'ortho' as const,
+				url: url.replace('{z}', String(z + dz)).replace('{x}', String((x << d) >> s)).replace('{y}', String((y << d) >> s)),
 				priority, cacheable: true,
 				run: async (signal: AbortSignal, requestId: string) => {
-					t.ortho = 'loading';
-					const canvas = await loadOrtho(url, z, x, y, dz, signal, requestId);
+					// a tile with a coarser photo keeps it until the finer one is in
+					if (t.ortho !== 'ready') t.ortho = 'loading';
+					const canvas = await loadOrtho(url, z, x, y, dz, signal, requestId, this.photos);
 					signal.throwIfAborted();
 					if (this.disposed) return;
-					if (!canvas) { t.ortho = 'none'; return; }
+					if (!canvas) { if (t.ortho !== 'ready') t.ortho = 'none'; return; }
 					const tex = new this.THREE.CanvasTexture(canvas);
 					tex.colorSpace = this.THREE.SRGBColorSpace;
 					tex.premultiplyAlpha = true;          // groundMaterial blends by its alpha
 					tex.anisotropy = 4;
 					t.tex?.dispose();
-					t.tex = tex; t.ortho = 'ready';
+					if (t.orthoId && t.orthoId !== id) this.requests.forget(this.orthoScope, t.orthoId);
+					t.tex = tex; t.ortho = 'ready'; t.orthoDz = dz; t.orthoId = id;
 					if (t.mesh) drapeOrtho(t.mesh, tex);
 					this.o.onChange?.();
 				},
 				onState: (state: import('./worldRequests').RequestState) => {
 					if (this.disposed) return;
-					// given up on: the height ramp stays; dropped from the view: asked again if wanted
-					if (state === 'failed') t.ortho = 'none';
+					// given up on: the height ramp (or the coarser photo) stays; dropped from the view: asked again if wanted
+					if (state === 'failed' && t.ortho !== 'ready') t.ortho = 'none';
 					else if (state === 'cancelled' && t.ortho === 'loading') t.ortho = undefined;
 				}
 			};
@@ -897,7 +1014,7 @@ export class TerrainTiles {
 			t.tex?.dispose();
 			this.tiles.delete(t.key);
 			this.requests.forget(this.requestScope, t.key);
-			this.requests.forget(this.orthoScope, t.key);
+			if (t.orthoId) this.requests.forget(this.orthoScope, t.orthoId);
 		}
 	}
 
@@ -905,6 +1022,7 @@ export class TerrainTiles {
 		this.disposed = true;
 		this.requests.release(this.requestScope);
 		this.requests.release(this.orthoScope);
+		this.photos.clear();
 		if (this.ownsRequests) this.requests.dispose();
 		for (const t of this.tiles.values()) {
 			t.mesh?.geometry.dispose();

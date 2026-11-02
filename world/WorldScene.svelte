@@ -210,7 +210,7 @@
 		untrack(() => {
 			terrain?.dispose();
 			ground = null;
-			terrain = new TerrainTiles(three!, { tileUrl, orthoUrl, frame: f, requests, onChange: changed });
+			terrain = new TerrainTiles(three!, { tileUrl, orthoUrl, orthoExtent: earth?.orthoExtent ?? undefined, frame: f, requests, onChange: changed });
 			scene!.add(terrain.group);
 			changed();
 		});

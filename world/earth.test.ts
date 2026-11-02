@@ -11,7 +11,8 @@ const SOURCES = {
 		changes: 'I3S to GLB; EGM96 heights converted to WGS84 ellipsoidal heights' }
 };
 
-function earthStub(channel: Record<string, string>, orthoSources: Record<string, string> = { year: '2024-2025' }) {
+const EXTENT = [11.871954, 48.20489, 19.137774, 51.412049];
+function earthStub(channel: Record<string, string>, orthoSources: Record<string, unknown> = { year: '2024-2025', extent: EXTENT }) {
 	const asked: string[] = [];
 	const f = (async (url: string) => {
 		asked.push(url);
@@ -56,18 +57,21 @@ describe('earth', () => {
 		expect(credits(SOURCES, { orthoYear: null, names: true }).at(-1)?.text).toBe('© OpenStreetMap contributors');
 	});
 
-	it('loads a channel: its releases, sources and the ortho year', async () => {
+	it('loads a channel: its releases, sources and the ortho year and coverage', async () => {
 		const { f, asked } = earthStub({ terrain: 'terrain-a', ortho: 'ortho-b', osm: 'osm-c' });
 		const e = await loadEarth('https://earth.example/', 'prod', { fetch: f });
 		expect(e).toEqual({ base: 'https://earth.example', releases: { terrain: 'terrain-a', ortho: 'ortho-b', osm: 'osm-c' },
-			sources: SOURCES, orthoYear: '2024-2025' });
+			sources: SOURCES, orthoYear: '2024-2025', orthoExtent: EXTENT });
 		expect(asked.sort()).toEqual(['https://earth.example/attribution', 'https://earth.example/channels/prod',
 			'https://earth.example/releases/ortho-b']);
 	});
 
-	it('refuses an ortho release without its year, and a missing channel', async () => {
+	it('refuses an ortho release without its year or its coverage, and a missing channel', async () => {
 		const { f } = earthStub({ terrain: 't', ortho: 'o' }, {});
 		await expect(loadEarth('https://e', 'prod', { fetch: f })).rejects.toThrow(/no year/);
+		for (const extent of [undefined, [1, 2, 3], [19, 48, 11, 51], [11, 48, 'e', 51]])
+			await expect(loadEarth('https://e', 'prod', { fetch: earthStub({ terrain: 't', ortho: 'o' }, { year: '2024', extent }).f }))
+				.rejects.toThrow(/no coverage box/);
 		await expect(loadEarth('https://e', 'nope', { fetch: earthStub({ terrain: 't' }).f })).rejects.toThrow(/404/);
 		await expect(loadEarth('https://e', 'prod', { fetch: earthStub({ ortho: 'o' }).f })).rejects.toThrow(/no terrain/);
 	});

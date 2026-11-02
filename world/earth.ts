@@ -20,6 +20,8 @@ export type Earth = {
 	sources: Record<string, Source>;
 	/** the ortho release's year, as ČÚZK's terms want it shown; null without an ortho release */
 	orthoYear: string | null;
+	/** the ortho release's coverage, [w, s, e, n] degrees: a tile wholly outside asks for no photo (terrainTiles) */
+	orthoExtent: [number, number, number, number] | null;
 };
 
 /** what a scene draws of earth's layers: the terrain model always, the rest only where the channel has them */
@@ -95,7 +97,7 @@ export function credits(sources: Record<string, Source>, shown: { orthoYear: str
 	return out;
 }
 
-/** a channel's releases, sources and the ortho year: three small cached reads */
+/** a channel's releases, sources and the ortho year and coverage: three small cached reads */
 export async function loadEarth(earth: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}):
 	Promise<Earth> {
 	const f = opts.fetch ?? fetch;
@@ -105,11 +107,16 @@ export async function loadEarth(earth: string, channel: string, opts: { fetch?: 
 		json<{ sources: Record<string, Source> }>(f, `${b}/attribution`, opts.signal)
 	]);
 	if (!ch.releases.terrain) throw new Error(`earth: channel ${channel} has no terrain release`);
-	let orthoYear: string | null = null;
+	let orthoYear: string | null = null, orthoExtent: Earth['orthoExtent'] = null;
 	if (ch.releases.ortho) {
-		const r = await json<{ sources?: { year?: string } }>(f, `${b}/releases/${encodeURIComponent(ch.releases.ortho)}`, opts.signal);
+		const r = await json<{ sources?: { year?: string; extent?: unknown } }>(f,
+			`${b}/releases/${encodeURIComponent(ch.releases.ortho)}`, opts.signal);
 		orthoYear = r.sources?.year ?? null;
 		if (orthoYear === null) throw new Error(`earth: ortho release ${ch.releases.ortho} names no year (ČÚZK's terms need it shown)`);
+		const x = r.sources?.extent;
+		if (!Array.isArray(x) || x.length !== 4 || !x.every(Number.isFinite) || !(x[0] < x[2] && x[1] < x[3]))
+			throw new Error(`earth: ortho release ${ch.releases.ortho} names no coverage box (sources.extent [w, s, e, n])`);
+		orthoExtent = x as [number, number, number, number];
 	}
-	return { base: b, releases: ch.releases, sources: attribution.sources, orthoYear };
+	return { base: b, releases: ch.releases, sources: attribution.sources, orthoYear, orthoExtent };
 }

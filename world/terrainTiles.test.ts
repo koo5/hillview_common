@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Frame } from './geodesy';
 import { selectMapTiles } from './footprintTiles';
-import { budgetFor, buildTileMesh, decodeTile, drapeOrtho, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
+import { budgetFor, buildTileMesh, decodeTile, drapeOrtho, photoDz, screenSizePx, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
 import { maxDistance } from './worldLabels';
 
 const frame = new Frame(50.1619, 14.614, 44.55);
@@ -179,6 +179,34 @@ describe('terrain tiles', () => {
 		expect(sh.fragmentShader).not.toContain('#include <color_fragment>');
 		expect(sh.fragmentShader).toContain('vColor.rgb * ( 1.0 - photo.a ) + photo.rgb * vShade');
 		expect(mat.customProgramCacheKey()).toBe('world-ground');
+	});
+
+	it('a tile is as big on screen as the area it covers: a far one seen from the ground is a sliver, a zoom enlarges it', () => {
+		// standing 2 m over the ground at the frame's origin, looking north and level
+		const cam = frame.fromGeodetic(frame.lat, frame.lon, frame.h + 2);
+		const north = frame.fromGeodetic(frame.lat + 0.001, frame.lon, frame.h + 2);
+		const dir = [north[0] - cam[0], north[1] - cam[1], north[2] - cam[2]] as [number, number, number];
+		const view = { dir, fovY: 55, aspect: 1.6, heightPx: 800 };
+		const [nx, ny] = tileOf(frame.lat, frame.lon, 16);
+		expect(screenSizePx(frame, cam, view, 16, nx, ny, frame.h)).toBe(Infinity);          // standing in it
+		const z = 13, [fx, fy] = tileOf(frame.lat + 0.2, frame.lon, z);                      // ~22 km north
+		const far = screenSizePx(frame, cam, view, z, fx, fy, frame.h);
+		expect(far).toBeGreaterThan(2);
+		expect(far).toBeLessThan(48);                                                     // a sliver
+		const zoomed = screenSizePx(frame, cam, { ...view, fovY: 4 }, z, fx, fy, frame.h);
+		expect(zoomed).toBeGreaterThan(far * 10);                                        // zoomed in, far bigger
+		const [bx, by] = tileOf(frame.lat - 0.2, frame.lon, z);                            // behind the camera
+		expect(screenSizePx(frame, cam, view, z, bx, by, frame.h)).toBe(0);
+	});
+
+	it('the photo follows the screen: its own at 256 px and up, a coarser one shared below, none under 2 px', () => {
+		expect(photoDz(15, 300, 18, 20)).toBe(0);
+		expect(photoDz(18, 300, 18, 20)).toBe(2);                 // at maxZ, the finer mosaic
+		expect(photoDz(18, 255, 18, 20)).toBe(-1);
+		expect(photoDz(18, 20, 18, 20)).toBe(-4);                 // 256 / 20 -> 4 levels up: a 16 px part of a z14 photo
+		expect(photoDz(9, 1.5, 18, 20)).toBeNull();
+		expect(photoDz(8, 3, 18, 20)).toBe(-2);                   // never coarser than z6
+		expect(photoDz(6, 3, 18, 20)).toBe(-0);
 	});
 
 	it('fills a hole ring by ring from its edge, marks it, and leaves a hole too wide alone', () => {
