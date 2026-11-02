@@ -71,6 +71,8 @@ type Tile = {
 	/** the heights as served (ellipsoidal, NaN = none), for heightAt */
 	h?: Float32Array;
 	n?: number;
+	/** each sample's source byte (SOURCE_NAMES), for groundAt */
+	src?: Uint8Array;
 	/** the finest data under it, metres per sample (from the source bytes): where to stop splitting */
 	res?: number;
 	used: number;
@@ -87,6 +89,9 @@ const N_DEFAULT = 65;
  * on water) filled from the 10 m / 2 m ground round them: no finer than the mosaic they came from.
  */
 export const SOURCE_RES: Record<number, number> = { 1: 10, 2: 10, 3: 30, 4: 2, 5: 2, 8: 10, 9: 2 };
+/** what each source byte is, said to a reader (the scene's height readout) */
+export const SOURCE_NAMES: Record<number, string> = { 1: '10 m bare', 2: '10 m surface', 3: 'GLO-30', 4: '2 m bare',
+	5: '2 m surface', 6: 'global model', 7: 'sea', 8: '10 m bare, hole filled', 9: '2 m bare, hole filled' };
 /** the coarse global model (ETOPO, ~1.8 km): where finer data may well exist below -- not a stop */
 const SRC_GLOBAL = 6;
 /** the sea at 0 m: nothing finer to find, ever */
@@ -764,7 +769,7 @@ export class TerrainTiles {
 					(t.mesh?.material as THREE_NS.Material | undefined)?.dispose();
 					t.mesh = buildTileMesh(this.THREE, this.o.frame, z, x, y, h, n, src) ?? undefined;
 					if (t.mesh && t.tex) drapeOrtho(t.mesh, t.tex);
-					t.h = h; t.n = n; t.state = 'ready'; this.version++;
+					t.h = h; t.n = n; t.src = src; t.state = 'ready'; this.version++;
 					t.complete = r.headers.get('X-Tile-Complete') !== '0';
 					this.compose(); this.o.onChange?.();
 					if (!t.complete) throw new RequestFailure(`Terrain incomplete (${r.headers.get('X-Tile-Status') ?? 'missing heights'}); ${r.headers.get('X-Tile-Fetch') ?? 'waiting for source data'}`, true, 30_000);
@@ -832,12 +837,21 @@ export class TerrainTiles {
 
 	/** the ground's ellipsoidal height at a point, from the finest loaded tile with a value there */
 	heightAt(lat: number, lon: number): number | null {
+		return this.groundAt(lat, lon)?.h ?? null;
+	}
+
+	/** the same, with where it came from: the tile's zoom and the source byte of the sample nearest the point */
+	groundAt(lat: number, lon: number): { h: number; z: number; src: number | null } | null {
 		for (let z = this.o.maxZ; z >= this.o.minZ; z--) {
 			const [x, y] = tileOf(lat, lon, z);
 			const t = this.tiles.get(`${z}/${x}/${y}` as TileKey);
 			if (t?.state !== 'ready' || !t.h || !t.n) continue;
-			const v = sampleTile(t.h, t.n, z, x, y, lat, lon);
-			if (v !== null) return v;
+			const h = sampleTile(t.h, t.n, z, x, y, lat, lon);
+			if (h === null) continue;
+			const k = 2 ** z, n = t.n;
+			const c = Math.round((((lon + 180) / 360) * k - x) * (n - 1));
+			const r = Math.round((((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * k - y) * (n - 1));
+			return { h, z, src: t.src ? t.src[r * n + c] ?? null : null };
 		}
 		return null;
 	}

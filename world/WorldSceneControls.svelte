@@ -86,6 +86,10 @@
 					{/each}
 				</div>
 			</fieldset>
+			<fieldset>
+				<legend>Readout</legend>
+				<label><input type="checkbox" bind:checked={layers.readout} data-testid="{testid}-readout-toggle" /> heights (camera, ground, landings)</label>
+			</fieldset>
 			{#if atlas.length}
 				<fieldset>
 					<legend>Point cloud</legend>

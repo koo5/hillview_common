@@ -14,12 +14,14 @@ export type SceneLayers = {
 	atlas: string | null;
 	/** place names (peaks, towers, places) over the scene */
 	names: boolean;
+	/** the height readout: the camera, the ground under it and where that came from, the last landing (2026-11-02) */
+	readout: boolean;
 };
 
 /** bare ground first (the operator, 2026-11-01): the atlas's points stand on it, and the surface model's roofs and
  * canopy would stand in their way */
 export function defaultLayers(channels: readonly string[]): SceneLayers {
-	return { terrain: 'bare', ortho: true, buildings: true, atlas: channels[0] ?? null, names: true };
+	return { terrain: 'bare', ortho: true, buildings: true, atlas: channels[0] ?? null, names: true, readout: false };
 }
 
 export function readLayers(saved: string | null, channels: readonly string[]): SceneLayers {
@@ -36,6 +38,7 @@ export function readLayers(saved: string | null, channels: readonly string[]): S
 		ortho: typeof v.ortho === 'boolean' ? v.ortho : d.ortho,
 		buildings: typeof v.buildings === 'boolean' ? v.buildings : d.buildings,
 		atlas: v.atlas === null || (typeof v.atlas === 'string' && channels.includes(v.atlas)) ? v.atlas : d.atlas,
-		names: typeof v.names === 'boolean' ? v.names : d.names
+		names: typeof v.names === 'boolean' ? v.names : d.names,
+		readout: typeof v.readout === 'boolean' ? v.readout : d.readout
 	};
 }

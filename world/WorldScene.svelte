@@ -29,7 +29,7 @@
 	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
 		savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
-	import { TerrainTiles, horizonM, zoomOf } from './terrainTiles';
+	import { SOURCE_NAMES, TerrainTiles, horizonM, zoomOf } from './terrainTiles';
 	import { DepthTarget, createWorldRenderer, type DepthMode } from './renderer';
 	import { LabelPool } from './labelPool';
 	import { WorldNames } from './worldNames';
@@ -300,7 +300,10 @@
 	}
 	const pairDelta = (a: Vec3, b: Vec3): [number, number] => [a[0] - b[0], a[1] - b[1]];
 	/** back to the observer: standing at the eye height over the app's location */
-	function land() {
+	/** the last landing and why (the readout says it: a reset of the altitude explains itself) */
+	let landed = $state('');
+	function land(why: string) {
+		landed = `landed ${new Date().toLocaleTimeString()}: ${why}`;
 		flying = false;
 		flight?.stop();
 		if (flyFrame) cancelAnimationFrame(flyFrame);
@@ -310,12 +313,16 @@
 		if (stick && !stickFrame) { stickT = 0; stickFrame = requestAnimationFrame(rise); }
 		draw();
 	}
-	/** the app's location is one of flight's own reports, as the app rounds it: not a move of the app's. Metres by the
-	 * local scale of a degree (the points are a flight's, metres apart: no need of the frame's exact geodesy) */
-	function isEcho(la: number, lo: number): boolean {
-		const tolerance = Math.max(1, locationPrecisionM), mLat = 111_320, mLon = 111_320 * Math.cos((la * Math.PI) / 180);
-		return sent.some((r) => Math.hypot((r.lat - la) * mLat, (r.lon - lo) * mLon) <= tolerance);
+	/** how far the app's location is from flight's path (its reports since take-off), in metres by the local scale of
+	 * a degree (the points are a flight's, metres apart: no need of the frame's exact geodesy); Infinity with none */
+	function offPathM(la: number, lo: number): number {
+		const mLat = 111_320, mLon = 111_320 * Math.cos((la * Math.PI) / 180);
+		let best = Infinity;
+		for (const r of sent) best = Math.min(best, Math.hypot((r.lat - la) * mLat, (r.lon - lo) * mLon));
+		return best;
 	}
+	/** within a map pixel of the path: flight's own report coming back, rounded, not a move of the app's */
+	const echoTolerance = () => Math.max(1, locationPrecisionM);
 
 	/** the names round the camera, for this frame, while they are shown */
 	$effect(() => {
@@ -358,18 +365,38 @@
 		if (r) namesAttr = `${r.placed}/${r.seen}/${r.items}${labelPool.stats.loading ? ' loading' : ''}`;
 	}
 
+	/** what the observer stands on, and whence (the readout's) */
+	let standOn = 0;
+	let groundFrom = '';
+	let readout = $state('');
+	/** the height readout (layers.readout): the camera, the ground under it and where it came from; heights are
+	 * ellipsoidal, as earth serves them (sea level here is ~44 m) */
+	function readoutOf(cam: Vec3): string {
+		const [la, lo, h] = frame!.toGeodetic(...cam);
+		if (!flying) return `camera ${h.toFixed(1)} m = ground ${standOn.toFixed(1)} m (${groundFrom}) + eye ${eyeM.toFixed(1)} m`;
+		const g = terrain?.groundAt(la, lo);
+		return g ? `flying: camera ${h.toFixed(1)} m, ${(h - g.h).toFixed(1)} m over ground ${g.h.toFixed(1)} m (terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`})`
+			: `flying: camera ${h.toFixed(1)} m, no ground under it loaded`;
+	}
+
 	function render() {
 		raf = 0;
 		if (!renderer || !scene || !camera || !frame) return;
 		if (!flying) {
-			ground = terrain?.heightAt(lat, lon) ?? ground;
-			const at = frame.fromGeodetic(lat, lon, (ground ?? atlas?.groundAt(lat, lon) ?? 0) + eyeM);
+			const g = terrain?.groundAt(lat, lon);
+			if (g) { ground = g.h; groundFrom = `terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`}`; }
+			else if (ground !== null && !groundFrom.startsWith('last')) groundFrom = `last known (${groundFrom})`;
+			const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
+			standOn = ground ?? fromAtlas ?? 0;
+			if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
+			const at = frame.fromGeodetic(lat, lon, standOn + eyeM);
 			const d = direction(bearing, pitch);
 			camera.position.set(...at);
 			camera.up.set(0, 0, 1);
 			camera.lookAt(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
 		}
 		const cam = camera.position.toArray() as Vec3;
+		if (layers.readout) readout = readoutOf(cam);
 		camera.fov = fov;
 		camera.near = depthMode === 'reversed' ? 0.05 : 0.5;
 		camera.far = Math.max(5_000, horizonM(flying ? flownEyeM : eyeM) * 1.5 + 50_000);
@@ -429,7 +456,9 @@
 	$effect(() => {
 		void lat; void lon; void bearing; void pitch; void eyeM; void fov;
 		untrack(() => {
-			if (flying && !isEcho(lat, lon)) land();
+			const off = flying ? offPathM(lat, lon) : 0;
+			if (off > echoTolerance())
+				land(`the map moved ${Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported'} (an echo is within ${echoTolerance().toFixed(1)} m)`);
 			ensureFrame();
 		});
 		draw();
@@ -531,7 +560,7 @@
 	function onkeydown(e: KeyboardEvent) {
 		if (keyBelongsToControl(e, false) || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (e.code === 'Escape' && flying) {
-			land();
+			land('Esc');
 			e.preventDefault();
 			return;
 		}
@@ -721,10 +750,14 @@
 		<WorldSceneControls bind:layers bind:flyLayout {onstick} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
+	{#if layers.readout && readout}
+		<div class="readout" role="status" data-testid="{testid}-readout" title="Heights over the ellipsoid, as earth serves them (sea level here is about 44 m)"
+			onpointerdown={(e) => e.stopPropagation()}>{readout}{#if landed}<br />{landed}{/if}</div>
+	{/if}
 	{#if flying}
 		<div class="flight" role="status" data-testid="{testid}-flight" onpointerdown={(e) => e.stopPropagation()}>
 			<span>flying · {Number(flySpeed.toPrecision(3))} m/s · scroll for speed</span>
-			<button type="button" onclick={land} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
+			<button type="button" onclick={() => land('the Land button')} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
 		</div>
 	{:else if speedShown}
 		<div class="flight" role="status" data-testid="{testid}-fly-speed">fly speed {Number(flySpeed.toPrecision(3))} m/s</div>
@@ -776,6 +809,20 @@
 		top: var(--world-scene-inset-top, 8px);
 		left: 8px;
 		right: 52px;
+	}
+	.readout {
+		position: absolute;
+		left: 8px;
+		right: 56px;
+		bottom: calc(var(--world-scene-credits-bottom, 0px) + 60px);
+		padding: 4px 8px;
+		border-radius: 6px;
+		background: rgba(19, 25, 35, 0.8);
+		color: #eee;
+		font: 11px ui-monospace, monospace;
+		overflow-wrap: anywhere;
+		pointer-events: auto;
+		width: fit-content;
 	}
 	.flight {
 		position: absolute;
