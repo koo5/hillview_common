@@ -301,6 +301,8 @@
 		if (flyFrame) cancelAnimationFrame(flyFrame);
 		flyFrame = flyT = 0;
 		sent = [];
+		// a pull still held: standing again, it raises the eye (the fly loop had it till now)
+		if (stick && !stickFrame) { stickT = 0; stickFrame = requestAnimationFrame(rise); }
 		draw();
 	}
 	/** the app's location is one of flight's own recent reports, as the app rounds it: not a move of the app's */

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	/**
 	 * Up and down as a spring-back stick (the operator, 2026-11-02: the wheel sets the fly speed, as in the workbench;
 	 * up/down moves to "a drag/pull stickshift control"). Pull the knob up to rise, down to sink: `onstick` gets the
@@ -30,15 +31,21 @@
 	}
 	function onpointerup(e: PointerEvent) {
 		if (start?.id !== e.pointerId) return;
+		release();
+	}
+	/** let go: the pointer up or cancelled, its capture lost (a window switch), or the stick gone while held (the
+	 * layers panel opened in its place): a pull nobody holds must not go on raising the eye (RECON-UI) */
+	function release() {
 		start = null;
 		held = false;
 		set(0);
 	}
+	onDestroy(() => { if (d) onstick(0); });
 </script>
 
 <div class="stick" role="slider" aria-label="Rise or sink: pull up or down" aria-orientation="vertical"
 	aria-valuemin={-1} aria-valuemax={1} aria-valuenow={Number(d.toFixed(2))} tabindex="-1"
-	{onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup} onwheel={(e) => e.stopPropagation()}
+	{onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup} onlostpointercapture={onpointerup} onwheel={(e) => e.stopPropagation()}
 	title="Rise or sink: pull up or down" data-testid="{testid}-stick" data-value={d.toFixed(2)}>
 	<span class="arrow up" aria-hidden="true">▲</span>
 	<span class="knob" class:held style:transform="translateY({-d * TRAVEL_PX}px)"></span>
