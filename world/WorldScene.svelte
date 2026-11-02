@@ -5,7 +5,7 @@
 	 * own panel round it decides where the observer stands and what a turn of the view writes back.
 	 *
 	 * Position and bearing are props (the app's one location state); a drag turns the view and says
-	 * so through `onlook`, the wheel or a pinch raises the eye. Nothing is drawn but on a change: a
+	 * so through `onlook`; the height stick or a pinch raises the eye, the wheel sets the fly speed. Nothing is drawn but on a change: a
 	 * moved view, a loaded tile, a resize.
 	 *
 	 * What is drawn is the viewer's choice (ea07, sceneLayers.ts): bare or surface ground, the orthophoto, IPR's
@@ -270,7 +270,7 @@
 		const dt = flyT ? Math.min(1, (t - flyT) / 1000) : 0;
 		flyT = t;
 		flight.speed = flySpeed;
-		const moving = flight.step(camera, dt);
+		const moving = flight.step(camera, dt, { thrust: [0, stick, 0] });
 		report(!moving);
 		render();
 		if (moving) flyFrame = requestAnimationFrame(fly);
@@ -485,18 +485,44 @@
 		pointers.delete(e.pointerId);
 		pinch = null;
 	}
+	/** the height stick's pull, -1..1, squared with its sign (a small pull is fine control, a full one fast):
+	 * standing, the eye rises or sinks by STICK_RISE e-folds a second at full pull (2 m to 900 m in about 4 s);
+	 * flying, it is the thrust R/F give, along the camera's up */
+	let stick = 0;
+	let stickFrame = 0, stickT = 0;
+	const STICK_RISE = 1.5;
+	function onstick(d: number) {
+		stick = d * Math.abs(d);
+		if (!d) return;
+		if (flying) { if (!flyFrame) flyFrame = requestAnimationFrame(fly); }
+		else if (!stickFrame) { stickT = 0; stickFrame = requestAnimationFrame(rise); }
+	}
+	function rise(t: number) {
+		stickFrame = 0;
+		if (!stick || flying || destroyed) return;
+		const dt = stickT ? Math.min(0.1, (t - stickT) / 1000) : 0;
+		stickT = t;
+		if (dt) raise(Math.exp(STICK_RISE * stick * dt));
+		stickFrame = requestAnimationFrame(rise);
+	}
+	/** a turn of the wheel while standing says the speed it set for a moment (flying, the flight's line says it) */
+	let speedShown = $state(false);
+	let speedTimer: ReturnType<typeof setTimeout> | 0 = 0;
+
 	function raise(factor: number) {
 		const next = Math.max(MIN_EYE_M, Math.min(MAX_EYE_M, eyeM * factor));
 		if (next !== eyeM) oneye?.(next);
 	}
 	function onwheel(e: WheelEvent) {
 		e.preventDefault();
-		if (!flying) return raise(Math.exp(e.deltaY * 0.002));
-		// in flight the wheel sets the speed, as in the workbench's
-		if (e.deltaY) {
-			flySpeed = boundedFlySpeed(flySpeed * (e.deltaY < 0 ? 1.25 : 0.8));
-			keep(FLY_SPEED_PREF, String(flySpeed));
-		}
+		// the wheel sets the fly speed, standing or flying, as in the workbench's; up and down are the stick's
+		if (!e.deltaY) return;
+		flySpeed = boundedFlySpeed(flySpeed * (e.deltaY < 0 ? 1.25 : 0.8));
+		keep(FLY_SPEED_PREF, String(flySpeed));
+		if (flying) return;
+		speedShown = true;
+		if (speedTimer) clearTimeout(speedTimer);
+		speedTimer = setTimeout(() => { speedTimer = 0; speedShown = false; }, 1500);
 	}
 	function onkeydown(e: KeyboardEvent) {
 		if (keyBelongsToControl(e, false) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -630,6 +656,8 @@
 		if (namesRepaint) cancelAnimationFrame(namesRepaint);
 		if (retry) clearTimeout(retry);
 		if (earthRetry) clearTimeout(earthRetry);
+		if (speedTimer) clearTimeout(speedTimer);
+		if (stickFrame) cancelAnimationFrame(stickFrame);
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
 		buildings?.dispose();
@@ -671,8 +699,10 @@
 	tabindex="0"
 	data-flying={flying}
 	data-fov={fov.toFixed(2)}
+	data-eye-m={eyeM.toFixed(1)}
+	data-fly-speed={flySpeed.toFixed(1)}
 	role="application"
-	aria-label="3D world: drag to look around, scroll or pinch to rise; click it, then fly with the keys"
+	aria-label="3D world: drag to look around, the stick or a pinch to rise, scroll for the fly speed; click it, then fly with the keys"
 >
 	<canvas class="names" bind:this={namesCanvas} data-testid="{testid}-names"></canvas>
 	<!-- the loading overlay, as the workbench shows it; its own pointer and wheel, so its list scrolls and its controls
@@ -684,7 +714,7 @@
 			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
 	{#if !loading && !error}
-		<WorldSceneControls bind:layers bind:flyLayout zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers bind:flyLayout {onstick} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if flying}
@@ -692,6 +722,8 @@
 			<span>flying · {Number(flySpeed.toPrecision(3))} m/s · scroll for speed</span>
 			<button type="button" onclick={land} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
 		</div>
+	{:else if speedShown}
+		<div class="flight" role="status" data-testid="{testid}-fly-speed">fly speed {Number(flySpeed.toPrecision(3))} m/s</div>
 	{/if}
 	{#if credits.length}
 		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button

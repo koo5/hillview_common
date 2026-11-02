@@ -6,11 +6,14 @@
 	 */
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, type FlyLayout } from './flight';
+	import HeightStick from './HeightStick.svelte';
 
-	let { layers = $bindable(), flyLayout = $bindable(), zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), flyLayout = $bindable(), onstick, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
 		/** which labels the flight keys go by (the keys themselves are physical) */
 		flyLayout: FlyLayout;
+		/** the height stick's deflection, -1..1, 0 when let go (HeightStick) */
+		onstick: (d: number) => void;
 		/** how the scene zooms, said after the flight keys (flight.ts ZoomKeys.label) */
 		zoomKeys: string;
 		/** earth answers: its ground can be chosen (without it the scene still flies, over the atlas) */
@@ -47,6 +50,10 @@
 			<path d="M12 3 2 8l10 5 10-5-10-5Zm-7.6 9L2 13.2l10 5 10-5-2.4-1.2L12 15.8 4.4 12Zm0 4L2 17.2l10 5 10-5-2.4-1.2L12 19.8 4.4 16Z" />
 		</svg>
 	</button>
+	{#if !open}
+		<!-- under the layers button; the open panel takes its place -->
+		<HeightStick {onstick} {testid} />
+	{/if}
 	{#if open}
 		<div class="panel" role="group" aria-label="Layers" data-testid="{testid}-layers">
 			{#if ground}
