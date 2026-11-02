@@ -278,10 +278,19 @@
 		flyT = t;
 		flight.speed = flySpeed;
 		const moving = flight.step(camera, dt, { thrust: [0, stick, 0] });
+		keepAboveGround();
 		report(!moving);
 		render();
 		if (moving) flyFrame = requestAnimationFrame(fly);
 		else flyT = 0;
+	}
+	/** the flown camera stays MIN_EYE_M over the loaded ground: flying into a hill put it under the terrain, which read as
+	 * the world jumping (the operator, 11-02). It slides along the ground instead; where no terrain is loaded it flies free */
+	function keepAboveGround() {
+		if (!frame || !camera || !terrain) return;
+		const [la, lo, h] = frame.toGeodetic(...(camera.position.toArray() as Vec3));
+		const g = terrain.heightAt(la, lo);
+		if (g !== null && h < g + MIN_EYE_M) camera.position.set(...frame.fromGeodetic(la, lo, g + MIN_EYE_M));
 	}
 	/** where flight has the observer, written back (at most every REPORT_MS, and once it comes to rest) */
 	function report(now: boolean) {
