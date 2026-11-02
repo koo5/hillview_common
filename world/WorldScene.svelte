@@ -246,16 +246,20 @@
 	let flight: Flight | null = null;
 	let flying = $state(false);
 	let flyFrame = 0, flyT = 0;
-	/** the ground points flight wrote in the last ECHO_MS, and when: the app's location coming back as one of them is
-	 * its own echo (a map writes its centre back after it moved there, rounded, and a report or two late) */
-	let sent: { lat: number; lon: number; t: number }[] = [];
+	/** every ground point flight wrote since take-off (the last MAX_SENT): the app's location coming back as one of them,
+	 * within a map pixel, is its own echo -- a map writes its centre back after it moved there, rounded, and late. Late
+	 * is any time: it was "the last 3 s" until 2026-11-02, and a map echo slower than that (a slow frame, Leaflet's pan)
+	 * read as a move of the user's and landed the flight, the altitude snapping back to the eye height (the operator:
+	 * "the viewer altitude resetting kinda randomly"). A move of the user's lands within a pixel of the path never. */
+	let sent: { lat: number; lon: number }[] = [];
 	let sentT = 0;
+	const MAX_SENT = 10_000;
 	/** the camera's height over the ground while it flies (the eye height's stand-in for the far plane) */
 	let flownEyeM = 0;
 	/** the zoom keys (ZOOM_PLUS_MINUS) narrowed or widened the view */
 	let zoom = $state<number | null>(null);
 	const fov = $derived(zoom ?? fovY);
-	const REPORT_MS = 300, ECHO_MS = 3000, MOVED_M = 0.1;
+	const REPORT_MS = 300, MOVED_M = 0.1;
 
 	function takeOff() {
 		if (!flight || !camera) return;
@@ -288,7 +292,8 @@
 		// a point only when it moved: a look alone (a drag, a roll) writes no location, which on a phone files a row
 		const last = sent.at(-1);
 		if (!last || Math.hypot(...pairDelta(frame.fromGeodetic(last.lat, last.lon, 0), frame.fromGeodetic(la, lo, 0))) >= MOVED_M) {
-			sent = [...sent.filter((r) => sentT - r.t < ECHO_MS), { lat: la, lon: lo, t: sentT }];
+			sent.push({ lat: la, lon: lo });
+			if (sent.length > MAX_SENT) sent.splice(0, sent.length - MAX_SENT);
 			onmove?.({ lat: la, lon: lo });
 		}
 		onlook?.(look);
@@ -305,14 +310,11 @@
 		if (stick && !stickFrame) { stickT = 0; stickFrame = requestAnimationFrame(rise); }
 		draw();
 	}
-	/** the app's location is one of flight's own recent reports, as the app rounds it: not a move of the app's */
+	/** the app's location is one of flight's own reports, as the app rounds it: not a move of the app's. Metres by the
+	 * local scale of a degree (the points are a flight's, metres apart: no need of the frame's exact geodesy) */
 	function isEcho(la: number, lo: number): boolean {
-		if (!frame) return false;
-		const a = frame.fromGeodetic(la, lo, 0), tolerance = Math.max(1, locationPrecisionM);
-		return sent.some((r) => {
-			const b = frame!.fromGeodetic(r.lat, r.lon, 0);
-			return Math.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance;
-		});
+		const tolerance = Math.max(1, locationPrecisionM), mLat = 111_320, mLon = 111_320 * Math.cos((la * Math.PI) / 180);
+		return sent.some((r) => Math.hypot((r.lat - la) * mLat, (r.lon - lo) * mLon) <= tolerance);
 	}
 
 	/** the names round the camera, for this frame, while they are shown */
