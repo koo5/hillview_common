@@ -263,6 +263,9 @@
 
 	function takeOff() {
 		if (!flight || !camera) return;
+		// the path starts where the app stands: until the map echoes the first report, a bearing echo, a zoom or a pull
+		// of the stick finds the app's location still here (RECON-UI)
+		if (!flying) sent = [{ lat, lon }];
 		flying = true;
 		if (!flyFrame) flyFrame = requestAnimationFrame(fly);
 	}
