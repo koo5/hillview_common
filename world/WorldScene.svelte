@@ -406,7 +406,8 @@
 	}
 
 	/** every layer loaded and quiet, and the names judged on a frame drawn since the last change (a verdict from
-	 * before the far terrain loaded took 1,600 of 1,650 names for seen: the workbench, 2026-10-02) */
+	 * before the far terrain loaded took 1,600 of 1,650 names for seen: the workbench, 2026-10-02). Never without
+	 * terrain (earth unreachable): a waiter on data-settled then times out, and data-error says why */
 	function settle() {
 		const st = terrain?.stats;
 		if (!st) return;

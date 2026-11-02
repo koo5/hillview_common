@@ -130,16 +130,17 @@ export class AtlasCloud {
 		return this.residency.summary;
 	}
 
-	private groundMemo: { key: string; h: number | null } = { key: '', h: null };
+	private groundMemo: { at: string; h: number | null; t: number } = { at: '', h: null, t: 0 };
 	/**
 	 * The ground under a point as the resident points say it, for a scene without terrain (earth unreachable): the
 	 * 10th percentile of their heights within 15 m, else 60 m (in a photogrammetric cloud the low points are the
-	 * ground; roofs and trees stand above it); null with fewer than 30 there. Ellipsoidal metres.
+	 * ground; roofs and trees stand above it); null with fewer than 30 there. Ellipsoidal metres. A height found is
+	 * kept for its point; while none is, the scan (every resident point) runs at most every 500 ms as blocks arrive.
 	 */
 	groundAt(lat: number, lon: number): number | null {
+		const at = `${lat},${lon}`, now = performance.now();
+		if (at === this.groundMemo.at && (this.groundMemo.h !== null || now - this.groundMemo.t < 500)) return this.groundMemo.h;
 		const blocks: CopcChunk[] = this.residency.blocks;
-		const key = `${lat},${lon},${blocks.length},${this.residency.summary.points}`;
-		if (key === this.groundMemo.key) return this.groundMemo.h;
 		const [px, py] = this.o.frame.fromGeodetic(lat, lon, 0);
 		let h: number | null = null;
 		for (const r of [15, 60]) {
@@ -157,7 +158,7 @@ export class AtlasCloud {
 				break;
 			}
 		}
-		this.groundMemo = { key, h };
+		this.groundMemo = { at, h, t: now };
 		return h;
 	}
 
