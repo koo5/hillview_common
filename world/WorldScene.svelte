@@ -203,7 +203,7 @@
 			buildings = new CityModelTiles({ manifestUrl, frame: f, requests, onChange: changed });
 			scene!.add(buildings.group);
 			changed();
-		}, (e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
+		}).catch((e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
 	});
 
 	// ---- flight ----
@@ -226,7 +226,7 @@
 	/** Z/X narrowed or widened the view */
 	let zoom = $state<number | null>(null);
 	const fov = $derived(zoom ?? fovY);
-	const REPORT_MS = 300, ECHO_MS = 3000;
+	const REPORT_MS = 300, ECHO_MS = 3000, MOVED_M = 0.1;
 
 	function takeOff() {
 		if (!flight || !camera) return;
@@ -256,10 +256,15 @@
 		if (g != null) flownEyeM = Math.max(0, h - g);
 		const look = headingOf(camera.getWorldDirection(new three!.Vector3()).toArray() as Vec3, localAxes(frame, p));
 		sentT = performance.now();
-		sent = [...sent.filter((r) => sentT - r.t < ECHO_MS), { lat: la, lon: lo, t: sentT }];
-		onmove?.({ lat: la, lon: lo });
+		// a point only when it moved: a look alone (a drag, a roll) writes no location, which on a phone files a row
+		const last = sent.at(-1);
+		if (!last || Math.hypot(...pairDelta(frame.fromGeodetic(last.lat, last.lon, 0), frame.fromGeodetic(la, lo, 0))) >= MOVED_M) {
+			sent = [...sent.filter((r) => sentT - r.t < ECHO_MS), { lat: la, lon: lo, t: sentT }];
+			onmove?.({ lat: la, lon: lo });
+		}
 		onlook?.(look);
 	}
+	const pairDelta = (a: Vec3, b: Vec3): [number, number] => [a[0] - b[0], a[1] - b[1]];
 	/** back to the observer: standing at the eye height over the app's location */
 	function land() {
 		flying = false;
@@ -454,7 +459,7 @@
 
 	async function labelAtlasVersions(url: string) {
 		const found = await Promise.all(atlasChannels.map((ch) => loadPointer(url, ch, { signal: abort.signal }).then(
-			(p) => ({ channel: ch, label: `${p.resolution === 'full' ? 'every point' : 'saved points'} · ${(p.points / 1e6).toFixed(0)} M` }),
+			(p) => ({ channel: ch, label: `${ch} · ${p.resolution === 'full' ? 'every point' : 'saved points'} · ${(p.points / 1e6).toFixed(0)} M` }),
 			() => null)));
 		if (!destroyed) atlasOptions = found.filter((o) => o !== null);
 	}
@@ -574,7 +579,8 @@
 				data-testid="{testid}-credits-toggle" onclick={() => (creditsToggled = !creditsOpen)}>ⓘ</button>
 			{#if creditsOpen}
 				{#each credits as c, i (i)}
-					{#if i}<span>{' · '}</span>{/if}<a href={c.terms_url ?? c.url} target="_blank" rel="noopener">{c.text}</a>
+					{#if i}<span>{' · '}</span>{/if}<a href={c.terms_url ?? c.url} target="_blank" rel="noopener">{c.text}</a
+					>{#if c.changes}<span class="changes">{` (${c.changes})`}</span>{/if}
 				{/each}
 			{/if}
 		</div>
@@ -590,7 +596,8 @@
 		touch-action: none;
 		background: #9ec3e6;
 	}
-	.world-scene:focus {
+	/* a pointer's focus draws no ring; the keyboard's does */
+	.world-scene:focus:not(:focus-visible) {
 		outline: none;
 	}
 	.world-scene :global(canvas) {

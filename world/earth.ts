@@ -10,7 +10,8 @@
 export type Releases = Partial<Record<'terrain' | 'ortho' | 'osm' | 'models', string>>;
 export type TerrainModel = 'surface' | 'bare';
 
-export type Credit = { text: string; url: string; licence: string; terms_url?: string };
+/** a credit line's entry; `changes` is what was done to the source, where its licence asks it said (CC BY: IPR's) */
+export type Credit = { text: string; url: string; licence: string; terms_url?: string; changes?: string };
 
 /** a channel as read: everything the scene needs to address its layers and credit them, whichever are shown */
 export type Earth = {
@@ -33,7 +34,7 @@ export type EarthLayers = {
 	modelsUrl?: string;
 };
 
-type Source = { text: string; url: string; licence: string; terms_url?: string };
+type Source = { text: string; url: string; licence: string; terms_url?: string; changes?: string };
 
 /** the terrain's sources, finest first: what a view of earth's terrain credits */
 const TERRAIN_SOURCES = ['cuzk', 'glo30', 'etopo'];
@@ -79,7 +80,8 @@ export function credits(sources: Record<string, Source>, orthoYear: string | nul
 	}
 	if (models) {
 		const s = source('ipr');
-		out.push({ text: s.text, url: s.url, licence: s.licence, terms_url: s.terms_url });
+		// CC BY asks the changes said: earth's attribution names them (I3S to GLB, the heights' datum)
+		out.push({ text: s.text, url: s.url, licence: s.licence, terms_url: s.terms_url, changes: s.changes });
 	}
 	return out;
 }

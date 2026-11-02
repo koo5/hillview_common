@@ -6,7 +6,8 @@ const SOURCES = {
 	glo30: { text: 'Copernicus WorldDEM-30', url: 'https://spacedata.copernicus.eu', licence: 'GLO-30' },
 	etopo: { text: 'ETOPO 2022', url: 'https://doi.org/10.25921/fd45-gt74', licence: 'public domain' },
 	'cuzk-ortho': { text: 'ČÚZK, {year}', url: 'https://geoportal.cuzk.gov.cz', licence: 'CC BY 4.0', terms_url: 'https://cuzk.gov.cz/terms' },
-	ipr: { text: 'datový podklad © IPR Praha', url: 'https://geoportalpraha.cz', licence: 'CC BY 4.0', terms_url: 'https://geoportalpraha.cz/terms' }
+	ipr: { text: 'datový podklad © IPR Praha', url: 'https://geoportalpraha.cz', licence: 'CC BY 4.0', terms_url: 'https://geoportalpraha.cz/terms',
+		changes: 'I3S to GLB; EGM96 heights converted to WGS84 ellipsoidal heights' }
 };
 
 function earthStub(channel: Record<string, string>, orthoSources: Record<string, string> = { year: '2024-2025' }) {
@@ -47,7 +48,7 @@ describe('earth', () => {
 		expect(() => credits({ ...SOURCES, glo30: undefined } as never, null)).toThrow(/glo30/);
 		const all = credits(SOURCES, '2024-2025', true);
 		expect(all.at(-1)).toEqual({ text: 'datový podklad © IPR Praha', url: 'https://geoportalpraha.cz', licence: 'CC BY 4.0',
-			terms_url: 'https://geoportalpraha.cz/terms' });
+			terms_url: 'https://geoportalpraha.cz/terms', changes: 'I3S to GLB; EGM96 heights converted to WGS84 ellipsoidal heights' });
 		expect(credits(SOURCES, null, true).map((x) => x.text).at(-2)).toBe('ETOPO 2022');
 		expect(() => credits({ ...SOURCES, ipr: undefined } as never, null, true)).toThrow(/ipr/);
 	});
