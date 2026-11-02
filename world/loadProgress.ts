@@ -1,7 +1,28 @@
+import type { RequestInfo, RequestKind } from './worldRequests';
+
 /** A long load a reader follows (the world's refinement): what it converges to, the step in flight, its re-plans
  * and the bytes it costs. The operator, 2026-10-24: messages that alternated between blocks and points could not tell
  * progress from a loop, and "mainly the total" bytes tells what the page needs from the network. */
 export type LoadProgress = { overall: string; step: string; restarts: string; bytes: string; rate: string; compact?:string };
+
+const LAYERS: [RequestKind, string][] = [['terrain', 'terrain'], ['ortho', 'orthophoto'], ['models', 'buildings'],
+	['labels', 'names'], ['map', 'map'], ['points', 'point cloud'], ['world', 'world'], ['cameras', 'cameras'], ['images', 'images']];
+
+/** Where each layer of the view stands, as its requests say it: loaded of wanted ("terrain 180/218 · orthophoto
+ * 150/219"), for a scene with no long load of its own (the public one). Null once nothing is pending, so the overlay
+ * still hides on a complete view. No bytes: earth and the atlas are other origins, whose sizes Resource Timing
+ * reports as 0 without Timing-Allow-Origin. */
+export function layerProgress(rows: readonly RequestInfo[]): LoadProgress | null {
+	const wanted = rows.filter(r => r.wanted);
+	if (!wanted.some(r => r.state === 'queued' || r.state === 'loading' || r.state === 'retrying')) return null;
+	const line = LAYERS.flatMap(([kind, name]) => {
+		const of = wanted.filter(r => r.kind === kind);
+		if (!of.length) return [];
+		const loaded = of.filter(r => r.state === 'loaded').length, failed = of.filter(r => r.state === 'failed').length;
+		return [`${name} ${loaded}/${of.length}${failed ? ` (${failed} failed)` : ''}`];
+	}).join(' · ');
+	return { overall: line, step: '', restarts: '', bytes: '', rate: '', compact: line };
+}
 
 export const formatBytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB`
 	: n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${Math.round(n)} B`;

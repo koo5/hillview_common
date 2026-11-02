@@ -27,7 +27,7 @@
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
 	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
-		savedFlyLayout, savedFlySpeed, zoomedFov, type FlyLayout } from './flight';
+		savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { TerrainTiles, horizonM, zoomOf } from './terrainTiles';
 	import { DepthTarget, createWorldRenderer, type DepthMode } from './renderer';
@@ -37,6 +37,7 @@
 	import { AtlasCloud, atlasCredits, loadAtlas, loadPointer, type AtlasVersion } from './atlasCloud';
 	import type { CityModelTiles } from './cityModelTiles';
 	import { WorldRequests } from './worldRequests';
+	import { layerProgress, type LoadProgress } from './loadProgress';
 	import { readLayers, type SceneLayers } from './sceneLayers';
 	import WorldRequestPanel from './WorldRequestPanel.svelte';
 	import WorldSceneControls from './WorldSceneControls.svelte';
@@ -156,6 +157,9 @@
 	/** the atlas's own start, after the scene is up: 'opening' while its hierarchy is read */
 	let atlasOpened: 'none' | 'opening' | 'open' = 'none';
 	const requests = new WorldRequests();
+	/** each layer's loaded of wanted, while anything is pending: the overlay's summary (loadProgress.layerProgress) */
+	let progress = $state<LoadProgress | null>(null);
+	const unprogress = requests.subscribe(() => { progress = layerProgress(requests.snapshot()); });
 	const gate = new ViewGate();
 	let scratch: THREE_NS.Vector3 | null = null;
 	let raf = 0;
@@ -241,7 +245,7 @@
 	let sentT = 0;
 	/** the camera's height over the ground while it flies (the eye height's stand-in for the far plane) */
 	let flownEyeM = 0;
-	/** Z/X narrowed or widened the view */
+	/** the zoom keys (ZOOM_PLUS_MINUS) narrowed or widened the view */
 	let zoom = $state<number | null>(null);
 	const fov = $derived(zoom ?? fovY);
 	const REPORT_MS = 300, ECHO_MS = 3000, MOVED_M = 0.1;
@@ -493,7 +497,7 @@
 			e.preventDefault();
 			return;
 		}
-		const z = zoomedFov(fov, e.code);
+		const z = zoomedFov(fov, e.code, ZOOM_PLUS_MINUS);
 		if (z !== null) {
 			zoom = z;
 			e.preventDefault();
@@ -608,6 +612,7 @@
 		worldNames?.dispose();
 		depthTarget?.dispose();
 		terrain?.dispose();
+		unprogress();
 		requests.dispose();
 		observer?.disconnect();
 		renderer?.dispose();
@@ -648,11 +653,11 @@
 		 click under the scene's capture -->
 	<div class="loading" role="region" aria-label="Loading" onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}
 		data-testid="{testid}-status" data-error={error ?? atlasError ?? ''}>
-		<WorldRequestPanel {requests} floating={false} system={error ?? (loading ? 'Loading the 3D world…' : atlasError ?? '')}
+		<WorldRequestPanel {requests} {progress} floating={false} system={error ?? (loading ? 'Loading the 3D world…' : atlasError ?? '')}
 			systemError={!!(error ?? atlasError)} />
 	</div>
 	{#if earth}
-		<WorldSceneControls bind:layers bind:flyLayout ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers bind:flyLayout zoomKeys={ZOOM_PLUS_MINUS.label} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if flying}

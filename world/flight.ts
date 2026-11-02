@@ -53,14 +53,14 @@ export type FlyAction = 'fwd' | 'left' | 'back' | 'right' | 'up' | 'down' | 'rol
 
 export const FLY_LAYOUTS: Record<FlyLayout, { label: string; keys: Record<FlyAction, string> }> = {
 	qwerty: {
-		label: 'W A S D · R/F up/down · Q/E roll · L level · Z/X zoom',
+		label: 'W A S D · R/F up/down · Q/E roll · L level',
 		keys: { fwd: 'KeyW', left: 'KeyA', back: 'KeyS', right: 'KeyD',
 			up: 'KeyR', down: 'KeyF', rollL: 'KeyQ', rollR: 'KeyE', level: 'KeyL' }
 	},
 	colemak: {
 		// same physical cluster (caps read W A R S), up/down on the keys above and
 		// below it that read P and T, roll on Q and F, level on the key that reads L
-		label: 'W A R S · P/T up/down · Q/F roll · L level · Z/X zoom',
+		label: 'W A R S · P/T up/down · Q/F roll · L level',
 		keys: { fwd: 'KeyW', left: 'KeyA', back: 'KeyS', right: 'KeyD',
 			up: 'KeyR', down: 'KeyF', rollL: 'KeyQ', rollR: 'KeyE', level: 'KeyU' }
 	}
@@ -70,10 +70,21 @@ export function savedFlyLayout(value: string | null): FlyLayout {
 	return value === 'colemak' ? 'colemak' : 'qwerty';
 }
 
-/** Z narrows the view, X widens it, in equal steps even at very narrow fields of view; null for any other key */
-export function zoomedFov(fovDeg: number, code: string): number | null {
-	if (code !== 'KeyZ' && code !== 'KeyX') return null;
-	const scale = code === 'KeyZ' ? 1 / 1.1 : 1.1;
+/**
+ * The keys that narrow and widen the view: each app's own. The workbench's are Z and X; Hillview's Z and X turn the
+ * view to a photo, so its scene zooms on + (=) and -, the keys its map zooms on when the map has focus (the
+ * operator, 2026-11-02).
+ */
+export type ZoomKeys = { narrow: readonly string[]; widen: readonly string[]; label: string };
+export const ZOOM_ZX: ZoomKeys = { narrow: ['KeyZ'], widen: ['KeyX'], label: 'Z/X zoom' };
+export const ZOOM_PLUS_MINUS: ZoomKeys = { narrow: ['Equal', 'NumpadAdd'], widen: ['Minus', 'NumpadSubtract'], label: '+/− zoom' };
+
+/** A narrowing key narrows the view, a widening one widens it, in equal steps even at very narrow fields of view;
+ * null for any other key */
+export function zoomedFov(fovDeg: number, code: string, keys: ZoomKeys): number | null {
+	const narrow = keys.narrow.includes(code);
+	if (!narrow && !keys.widen.includes(code)) return null;
+	const scale = narrow ? 1 / 1.1 : 1.1;
 	const fov = (2 * Math.atan(Math.tan((fovDeg * Math.PI) / 360) * scale) * 180) / Math.PI;
 	return Math.max(0.1, Math.min(120, fov));
 }

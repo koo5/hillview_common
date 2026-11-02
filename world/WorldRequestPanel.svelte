@@ -118,7 +118,7 @@
 		{#if progress && display!=='line'}
 			<div class="progress" data-testid="world-progress">
 				<div class="overall" data-testid="world-progress-overall">{progress.overall}</div>
-				<div class="step" data-testid="world-progress-step">{progress.step}{#if progress.restarts}<span class="restarts" data-testid="world-progress-restarts"> · {progress.restarts}</span>{/if}</div>
+				{#if progress.step || progress.restarts}<div class="step" data-testid="world-progress-step">{progress.step}{#if progress.restarts}<span class="restarts" data-testid="world-progress-restarts"> · {progress.restarts}</span>{/if}</div>{/if}
 				{#if progress.bytes}<div class="step" data-testid="world-progress-bytes">{progress.bytes}
 					{#if progress.rate}<span class="rate" class:idle={!assetsLoading} data-testid="world-network-rate" data-active={assetsLoading}
 						title={assetsLoading?'Transfer rate while tracked assets are loading':'No asset downloads active'}> · {assetsLoading?progress.rate:'network idle'}</span>{/if}

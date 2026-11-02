@@ -7,10 +7,12 @@
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, type FlyLayout } from './flight';
 
-	let { layers = $bindable(), flyLayout = $bindable(), ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), flyLayout = $bindable(), zoomKeys, ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
 		/** which labels the flight keys go by (the keys themselves are physical) */
 		flyLayout: FlyLayout;
+		/** how the scene zooms, said after the flight keys (flight.ts ZoomKeys.label) */
+		zoomKeys: string;
 		/** the channel has an orthophoto */
 		ortho: boolean;
 		/** the channel has city models */
@@ -66,7 +68,7 @@
 			{/if}
 			<fieldset class="fly">
 				<legend>Fly</legend>
-				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS[flyLayout].label}</p>
+				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS[flyLayout].label} · {zoomKeys}</p>
 				<div class="layouts">
 					{#each Object.keys(FLY_LAYOUTS) as l (l)}
 						<label><input type="radio" bind:group={flyLayout} value={l} data-testid="{testid}-fly-{l}" /> {l}</label>

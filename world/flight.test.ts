@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { Vector3 } from 'three';
-import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, savedFlyLayout, zoomedFov } from './flight';
+import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, savedFlyLayout, zoomedFov,
+	ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
 
 test('metric preference has one default and bounded physical range', () => {
 	expect(DEFAULT_FLY_MPS).toBe(5);
@@ -64,12 +65,17 @@ test('keys are read by physical key, as the layout names them; only flight keys 
 });
 
 test('Z and X zoom in equal steps, within bounds; other keys are no zoom', () => {
-	const inOnce = zoomedFov(55, 'KeyZ')!;
+	const inOnce = zoomedFov(55, 'KeyZ', ZOOM_ZX)!;
 	expect(inOnce).toBeLessThan(55);
-	expect(zoomedFov(inOnce, 'KeyX')).toBeCloseTo(55, 9);
-	expect(zoomedFov(0.1, 'KeyZ')).toBe(0.1);
-	expect(zoomedFov(119, 'KeyX')).toBe(120);
-	expect(zoomedFov(55, 'KeyW')).toBeNull();
+	expect(zoomedFov(inOnce, 'KeyX', ZOOM_ZX)).toBeCloseTo(55, 9);
+	expect(zoomedFov(0.1, 'KeyZ', ZOOM_ZX)).toBe(0.1);
+	expect(zoomedFov(119, 'KeyX', ZOOM_ZX)).toBe(120);
+	expect(zoomedFov(55, 'KeyW', ZOOM_ZX)).toBeNull();
+	// Hillview's scene: + (= unshifted, or the keypad's) and -; its Z and X are the app's, never a zoom
+	expect(zoomedFov(55, 'Equal', ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
+	expect(zoomedFov(55, 'NumpadAdd', ZOOM_PLUS_MINUS)).toBeCloseTo(inOnce, 9);
+	expect(zoomedFov(inOnce, 'Minus', ZOOM_PLUS_MINUS)).toBeCloseTo(55, 9);
+	expect(zoomedFov(55, 'KeyZ', ZOOM_PLUS_MINUS)).toBeNull();
 });
 
 test('a flight moves the camera along its own axes and comes to rest when the keys are let go', async () => {
