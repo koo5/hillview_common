@@ -53,6 +53,9 @@
 		oneye?: (eyeM: number) => void;
 		/** flight moved the observer: the ground point under it now (the app's location follows) */
 		onmove?: (at: { lat: number; lon: number }) => void;
+		/** how coarsely the app's location comes back after an `onmove` (a map rounds its centre to its pixels), metres:
+		 * a location that close to one of flight's own reports is its echo, not a move */
+		locationPrecisionM?: number;
 		/** a published atlas (atlas.hillview.cz): a channel's world snapshot is drawn as points */
 		atlasUrl?: string;
 		/** the atlas channels a viewer may choose between, the default first */
@@ -64,7 +67,7 @@
 	};
 	let {
 		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55,
-		onlook, oneye, onmove, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
+		onlook, oneye, onmove, locationPrecisionM = 1, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
 		testid = 'world-scene'
 	}: Props = $props();
 
@@ -214,14 +217,16 @@
 	let flight: Flight | null = null;
 	let flying = $state(false);
 	let flyFrame = 0, flyT = 0;
-	/** the ground point flight last wrote, and when: the app's location coming back as this point is its own echo */
-	let sentAt: [number, number] | null = null, sentT = 0;
+	/** the ground points flight wrote in the last ECHO_MS, and when: the app's location coming back as one of them is
+	 * its own echo (a map writes its centre back after it moved there, rounded, and a report or two late) */
+	let sent: { lat: number; lon: number; t: number }[] = [];
+	let sentT = 0;
 	/** the camera's height over the ground while it flies (the eye height's stand-in for the far plane) */
 	let flownEyeM = 0;
 	/** Z/X narrowed or widened the view */
 	let zoom = $state<number | null>(null);
 	const fov = $derived(zoom ?? fovY);
-	const ECHO_M = 1, REPORT_MS = 300;
+	const REPORT_MS = 300, ECHO_MS = 3000;
 
 	function takeOff() {
 		if (!flight || !camera) return;
@@ -231,7 +236,9 @@
 	function fly(t: number) {
 		flyFrame = 0;
 		if (!flying || !flight || !camera || destroyed) return;
-		const dt = flyT ? Math.min(0.1, (t - flyT) / 1000) : 0;
+		// real elapsed time, so a slow device flies as far as a fast one; at most a second, so a tab that was away
+		// does not jump the camera on its return
+		const dt = flyT ? Math.min(1, (t - flyT) / 1000) : 0;
 		flyT = t;
 		flight.speed = flySpeed;
 		const moving = flight.step(camera, dt);
@@ -248,8 +255,8 @@
 		const g = terrain?.heightAt(la, lo);
 		if (g != null) flownEyeM = Math.max(0, h - g);
 		const look = headingOf(camera.getWorldDirection(new three!.Vector3()).toArray() as Vec3, localAxes(frame, p));
-		sentAt = [la, lo];
 		sentT = performance.now();
+		sent = [...sent.filter((r) => sentT - r.t < ECHO_MS), { lat: la, lon: lo, t: sentT }];
 		onmove?.({ lat: la, lon: lo });
 		onlook?.(look);
 	}
@@ -259,14 +266,17 @@
 		flight?.stop();
 		if (flyFrame) cancelAnimationFrame(flyFrame);
 		flyFrame = flyT = 0;
-		sentAt = null;
+		sent = [];
 		draw();
 	}
-	/** the app's location is flight's own last report, not a move of the app's */
+	/** the app's location is one of flight's own recent reports, as the app rounds it: not a move of the app's */
 	function isEcho(la: number, lo: number): boolean {
-		if (!sentAt || !frame) return false;
-		const a = frame.fromGeodetic(la, lo, 0), b = frame.fromGeodetic(sentAt[0], sentAt[1], 0);
-		return Math.hypot(a[0] - b[0], a[1] - b[1]) < ECHO_M;
+		if (!frame) return false;
+		const a = frame.fromGeodetic(la, lo, 0), tolerance = Math.max(1, locationPrecisionM);
+		return sent.some((r) => {
+			const b = frame!.fromGeodetic(r.lat, r.lon, 0);
+			return Math.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance;
+		});
 	}
 
 	function render() {
