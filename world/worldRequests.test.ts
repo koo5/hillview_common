@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { WorldRequests, RequestFailure, requestHeaders, responseOrThrow, sameOrigin, type RequestSpec } from './worldRequests';
+import { WorldRequests, RequestFailure, failureOf, requestHeaders, responseOrThrow, sameOrigin, type RequestSpec } from './worldRequests';
 const wait = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
 function gate() {
 	let resolve!: (value?: unknown) => void;
@@ -127,5 +127,20 @@ describe('requestHeaders', () => {
 	test('without a page, only a relative URL is same-origin', () => {
 		expect(sameOrigin('/api/x')).toBe(true);
 		expect(sameOrigin('https://earth.example/x')).toBe(false);
+	});
+});
+
+describe('failureOf', () => {
+	test('reads a 503 with Retry-After as retryable after that long (earth ortho: sheets still downloading)', async () => {
+		const f = await failureOf(new Response(JSON.stringify({ detail: 'sheets downloading' }),
+			{ status: 503, statusText: 'Service Unavailable', headers: { 'Retry-After': '20' } }));
+		expect(f.retryable).toBe(true);
+		expect(f.retryAfterMs).toBe(20_000);
+		expect(f.message).toBe('HTTP 503 Service Unavailable: sheets downloading');
+	});
+	test('a 404 is not retried, and no Retry-After is none', async () => {
+		const f = await failureOf(new Response('nope', { status: 404 }));
+		expect(f.retryable).toBe(false);
+		expect(f.retryAfterMs).toBeUndefined();
 	});
 });

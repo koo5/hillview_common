@@ -205,12 +205,18 @@ export class WorldRequests {
 export async function responseOrThrow(url: string, signal: AbortSignal, init?: RequestInit): Promise<Response> {
 	const response = await fetch(url, { ...init, signal });
 	if (response.ok) return response;
+	throw await failureOf(response);
+}
+
+/** A response that is not ok, as the queue reads it: its detail, whether to retry (408, 429, 5xx), and the server's
+ * Retry-After, which the retry waits for at least */
+export async function failureOf(response: Response): Promise<RequestFailure> {
 	let detail = `HTTP ${response.status} ${response.statusText}`.trim();
 	try { const body = await response.json(); if (body.detail) detail += `: ${typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)}`; } catch { /* proxy error */ }
 	const retry = response.status === 408 || response.status === 429 || response.status >= 500;
 	const after = response.headers.get('Retry-After');
 	const retryAfterMs = after ? (/^\d+$/.test(after) ? Number(after) * 1000 : Math.max(0, Date.parse(after) - Date.now())) : undefined;
-	throw new RequestFailure(detail, retry, Number.isFinite(retryAfterMs) ? retryAfterMs : undefined);
+	return new RequestFailure(detail, retry, Number.isFinite(retryAfterMs) ? retryAfterMs : undefined);
 }
 
 export type ResourceRead = <T>(url: string, init: RequestInit | undefined, read: (response: Response) => Promise<T>) => Promise<T>;

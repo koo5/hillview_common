@@ -31,7 +31,7 @@
  */
 import type * as THREE_NS from 'three';
 import { Frame, type Vec3 } from './geodesy';
-import { WorldRequests, RequestFailure, responseOrThrow, requestHeaders } from './worldRequests';
+import { WorldRequests, RequestFailure, failureOf, responseOrThrow, requestHeaders } from './worldRequests';
 
 type Three = typeof THREE_NS;
 
@@ -587,7 +587,8 @@ export async function loadOrtho(url: string, z: number, x: number, y: number, dz
 		const u = url.replace('{z}', String(z + dz)).replace('{x}', String(x * k + cx)).replace('{y}', String(y * k + cy));
 		const r = await fetch(u, { signal, headers: requestHeaders(u, undefined, requestId) });
 		if (r.status === 404) return;
-		if (!r.ok) throw new RequestFailure(`Orthophoto HTTP ${r.status}`, r.status === 429 || r.status >= 500);
+		// a 503 with Retry-After while its sheets download (earth's ortho): asked again after it, the ramp meanwhile
+		if (!r.ok) throw await failureOf(r);
 		const img = await createImageBitmap(await r.blob());
 		ctx.drawImage(img, cx * 256, cy * 256, 256, 256);
 		img.close();
