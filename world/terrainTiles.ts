@@ -84,6 +84,10 @@ type Tile = {
 	/** the ortho zoom it was cut from, relative to its own (photoDz), and the request that brought it */
 	orthoDz?: number;
 	orthoId?: string;
+	/** ortho 'none' was the answer at this photoDz: that zoom and coarser have no imagery here, a finer one may */
+	noneDz?: number;
+	/** its mean height, once (the photo's size on screen is measured at it) */
+	hMean?: number;
 	tex?: THREE_NS.Texture;
 };
 
@@ -285,35 +289,50 @@ const PHOTO_MIN_Z = 6;
  * it is cut from; null for no photo (too small on screen) */
 export function photoDz(z: number, sizePx: number, maxZ: number, orthoMaxZ: number): number | null {
 	if (sizePx < PHOTO_MIN_PX) return null;
-	if (sizePx >= 256) return z >= maxZ ? Math.max(0, Math.min(2, orthoMaxZ - z)) : 0;
+	// at maxZ the finer mosaic, by the same rule the other way: 2x2 from 512 px, 4x4 from 1024 (RECON-UI)
+	if (sizePx >= 256) return z >= maxZ ? Math.max(0, Math.min(2, orthoMaxZ - z, Math.floor(Math.log2(sizePx / 256)))) : 0;
 	return -Math.max(0, Math.min(z - PHOTO_MIN_Z, Math.ceil(Math.log2(256 / sizePx))));
 }
 
+/** a convex polygon clipped to where `side` is >= 0 (Sutherland-Hodgman), its points interpolated across an edge */
+function clipPolygon<T extends number[]>(poly: T[], side: (p: T) => number): T[] {
+	const out: T[] = [];
+	for (let i = 0; i < poly.length; i++) {
+		const a = poly[i], b = poly[(i + 1) % poly.length], da = side(a), db = side(b);
+		if (da >= 0) out.push(a);
+		if ((da >= 0) !== (db >= 0)) {
+			const t = da / (da - db);
+			out.push(a.map((v, k) => v + (b[k] - v) * t) as T);
+		}
+	}
+	return out;
+}
+
 /**
- * How big a tile's ground is on screen: the square root of the area its four corners (at height h) cover, in pixels,
- * seen as `view` sees from `cam` -- a far tile seen from the ground is wide but a few pixels tall, and its area says
- * so. 0 when it lies wholly behind the camera (turned round, the next update asks again); Infinity when only part of
- * it does (the camera stands in or beside it).
+ * How big a tile's ground is on screen: the square root of the screen area its four corners (at height h) cover, in
+ * pixels, seen as `view` sees from `cam` -- the quad clipped at the camera's near plane and then to the screen. A far
+ * tile seen from the ground is wide and a few pixels tall, and its area says so; one beside or behind the camera
+ * counts only the part on screen (0 for none).
  */
 export function screenSizePx(frame: Frame, cam: Vec3, view: View, z: number, x: number, y: number, h: number): number {
 	const f = normalize(view.dir);
 	let r = normalize([f[1], -f[0], 0]);
 	if (!Number.isFinite(r[0]) || Math.hypot(...r) < 0.5) r = [1, 0, 0];
 	const u: Vec3 = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
-	const k = pxPerRad(view);
+	const k = pxPerRad(view), hy = view.heightPx / 2, hx = hy * view.aspect;
 	const b = tileLonLat(z, x, y);
-	const px: [number, number][] = [];
-	let behind = 0;
-	for (const [la, lo] of [[b.s, b.w], [b.s, b.e], [b.n, b.e], [b.n, b.w]]) {
+	// camera space: right, up, forward
+	let poly: number[][] = [[b.s, b.w], [b.s, b.e], [b.n, b.e], [b.n, b.w]].map(([la, lo]) => {
 		const p = frame.fromGeodetic(la, lo, h);
 		const q = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
-		const d = q[0] * f[0] + q[1] * f[1] + q[2] * f[2];
-		if (d <= 1) { behind++; continue; }
-		px.push([((q[0] * r[0] + q[1] * r[1] + q[2] * r[2]) / d) * k, ((q[0] * u[0] + q[1] * u[1] + q[2] * u[2]) / d) * k]);
-	}
-	if (behind) return behind === 4 ? 0 : Infinity;
+		return [q[0] * r[0] + q[1] * r[1] + q[2] * r[2], q[0] * u[0] + q[1] * u[1] + q[2] * u[2], q[0] * f[0] + q[1] * f[1] + q[2] * f[2]];
+	});
+	poly = clipPolygon(poly, (p) => p[2] - 0.5);
+	let px = poly.map(([a, c, d]) => [(a / d) * k, (c / d) * k]);
+	for (const [axis, sign, lim] of [[0, 1, hx], [0, -1, hx], [1, 1, hy], [1, -1, hy]] as const)
+		px = clipPolygon(px, (p) => lim - sign * p[axis]);
 	let area = 0;
-	for (let i = 0; i < 4; i++) area += px[i][0] * px[(i + 1) % 4][1] - px[(i + 1) % 4][0] * px[i][1];
+	for (let i = 0; i < px.length; i++) area += px[i][0] * px[(i + 1) % px.length][1] - px[(i + 1) % px.length][0] * px[i][1];
 	return Math.sqrt(Math.abs(area) / 2);
 }
 
@@ -852,10 +871,8 @@ export class TerrainTiles {
 			if (b.e <= ex[0] || ex[2] <= b.w || b.n <= ex[1] || ex[3] <= b.s) return null;
 		}
 		if (!this.looked || !t.h) return photoDz(t.z, 256, this.o.maxZ, this.o.orthoMaxZ);
-		let sum = 0, n = 0;
-		for (const v of t.h) if (Number.isFinite(v)) { sum += v; n++; }
-		if (!n) return null;
-		const px = screenSizePx(this.o.frame, this.looked.cam, this.looked.view, t.z, t.x, t.y, sum / n);
+		if (t.hMean === undefined) return null;
+		const px = screenSizePx(this.o.frame, this.looked.cam, this.looked.view, t.z, t.x, t.y, t.hMean);
 		return photoDz(t.z, px, this.o.maxZ, this.o.orthoMaxZ);
 	}
 
@@ -879,7 +896,9 @@ export class TerrainTiles {
 					(t.mesh?.material as THREE_NS.Material | undefined)?.dispose();
 					t.mesh = buildTileMesh(this.THREE, this.o.frame, z, x, y, h, n, src) ?? undefined;
 					if (t.mesh && t.tex) drapeOrtho(t.mesh, t.tex);
-					t.h = h; t.n = n; t.src = src; t.state = 'ready'; this.version++;
+					let sum = 0, cnt = 0;
+					for (const v of h) if (Number.isFinite(v)) { sum += v; cnt++; }
+					t.h = h; t.n = n; t.src = src; t.hMean = cnt ? sum / cnt : undefined; t.state = 'ready'; this.version++;
 					t.complete = r.headers.get('X-Tile-Complete') !== '0';
 					this.compose(); this.o.onChange?.();
 					if (!t.complete) throw new RequestFailure(`Terrain incomplete (${r.headers.get('X-Tile-Status') ?? 'missing heights'}); ${r.headers.get('X-Tile-Fetch') ?? 'waiting for source data'}`, true, 30_000);
@@ -912,9 +931,10 @@ export class TerrainTiles {
 		const want: [Tile, number][] = [];
 		for (const k of this.wanted) {
 			const t = this.tiles.get(k);
-			if (t?.state !== 'ready' || !t.mesh || t.ortho === 'none') continue;
+			if (t?.state !== 'ready' || !t.mesh) continue;
 			const dz = this.photoDzOf(t);
-			if (dz !== null && (t.ortho !== 'ready' || dz > (t.orthoDz ?? -Infinity))) want.push([t, dz]);
+			if (dz === null || (t.noneDz !== undefined && dz <= t.noneDz)) continue;
+			if (t.ortho !== 'ready' || dz > (t.orthoDz ?? -Infinity)) want.push([t, dz]);
 		}
 		this.requests.reconcile(this.orthoScope, want.map(([t, dz], priority) => {
 			const { z, x, y, key } = t;
@@ -931,7 +951,7 @@ export class TerrainTiles {
 					const canvas = await loadOrtho(url, z, x, y, dz, signal, requestId, this.photos);
 					signal.throwIfAborted();
 					if (this.disposed) return;
-					if (!canvas) { if (t.ortho !== 'ready') t.ortho = 'none'; return; }
+					if (!canvas) { t.noneDz = Math.max(t.noneDz ?? -Infinity, dz); if (t.ortho !== 'ready') t.ortho = 'none'; return; }
 					const tex = new this.THREE.CanvasTexture(canvas);
 					tex.colorSpace = this.THREE.SRGBColorSpace;
 					tex.premultiplyAlpha = true;          // groundMaterial blends by its alpha
@@ -945,7 +965,7 @@ export class TerrainTiles {
 				onState: (state: import('./worldRequests').RequestState) => {
 					if (this.disposed) return;
 					// given up on: the height ramp (or the coarser photo) stays; dropped from the view: asked again if wanted
-					if (state === 'failed' && t.ortho !== 'ready') t.ortho = 'none';
+					if (state === 'failed') { t.noneDz = Math.max(t.noneDz ?? -Infinity, dz); if (t.ortho !== 'ready') t.ortho = 'none'; }
 					else if (state === 'cancelled' && t.ortho === 'loading') t.ortho = undefined;
 				}
 			};

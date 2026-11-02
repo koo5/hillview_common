@@ -188,7 +188,9 @@ describe('terrain tiles', () => {
 		const dir = [north[0] - cam[0], north[1] - cam[1], north[2] - cam[2]] as [number, number, number];
 		const view = { dir, fovY: 55, aspect: 1.6, heightPx: 800 };
 		const [nx, ny] = tileOf(frame.lat, frame.lon, 16);
-		expect(screenSizePx(frame, cam, view, 16, nx, ny, frame.h)).toBe(Infinity);          // standing in it
+		const under = screenSizePx(frame, cam, view, 16, nx, ny, frame.h);                    // standing in it
+		expect(under).toBeGreaterThan(256);
+		expect(under).toBeLessThanOrEqual(Math.sqrt(800 * 1.6 * 800) + 1e-6);              // never more than the screen
 		const z = 13, [fx, fy] = tileOf(frame.lat + 0.2, frame.lon, z);                      // ~22 km north
 		const far = screenSizePx(frame, cam, view, z, fx, fy, frame.h);
 		expect(far).toBeGreaterThan(2);
@@ -200,8 +202,12 @@ describe('terrain tiles', () => {
 	});
 
 	it('the photo follows the screen: its own at 256 px and up, a coarser one shared below, none under 2 px', () => {
-		expect(photoDz(15, 300, 18, 20)).toBe(0);
-		expect(photoDz(18, 300, 18, 20)).toBe(2);                 // at maxZ, the finer mosaic
+		expect(photoDz(15, 3000, 18, 20)).toBe(0);
+		expect(photoDz(18, 300, 18, 20)).toBe(0);                 // at maxZ, the finer mosaic only as big as it shows
+		expect(photoDz(18, 600, 18, 20)).toBe(1);
+		expect(photoDz(18, 2000, 18, 20)).toBe(2);
+		expect(photoDz(18, Infinity, 18, 20)).toBe(2);            // standing in it
+		expect(photoDz(19, 2000, 18, 20)).toBe(1);                // never past orthoMaxZ
 		expect(photoDz(18, 255, 18, 20)).toBe(-1);
 		expect(photoDz(18, 20, 18, 20)).toBe(-4);                 // 256 / 20 -> 4 levels up: a 16 px part of a z14 photo
 		expect(photoDz(9, 1.5, 18, 20)).toBeNull();
