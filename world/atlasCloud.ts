@@ -130,6 +130,37 @@ export class AtlasCloud {
 		return this.residency.summary;
 	}
 
+	private groundMemo: { key: string; h: number | null } = { key: '', h: null };
+	/**
+	 * The ground under a point as the resident points say it, for a scene without terrain (earth unreachable): the
+	 * 10th percentile of their heights within 15 m, else 60 m (in a photogrammetric cloud the low points are the
+	 * ground; roofs and trees stand above it); null with fewer than 30 there. Ellipsoidal metres.
+	 */
+	groundAt(lat: number, lon: number): number | null {
+		const blocks: CopcChunk[] = this.residency.blocks;
+		const key = `${lat},${lon},${blocks.length},${this.residency.summary.points}`;
+		if (key === this.groundMemo.key) return this.groundMemo.h;
+		const [px, py] = this.o.frame.fromGeodetic(lat, lon, 0);
+		let h: number | null = null;
+		for (const r of [15, 60]) {
+			const zs: number[] = [];
+			for (const b of blocks) {
+				const p = b.positions;
+				for (let i = 0; i < p.length; i += 3) {
+					const dx = p[i] - px, dy = p[i + 1] - py;
+					if (dx * dx + dy * dy <= r * r) zs.push(p[i + 2]);
+				}
+			}
+			if (zs.length >= 30) {
+				zs.sort((a, b) => a - b);
+				h = this.o.frame.toGeodetic(px, py, zs[Math.floor(zs.length * 0.1)])[2];
+				break;
+			}
+		}
+		this.groundMemo = { key, h };
+		return h;
+	}
+
 	/** no batch to read and no view waiting: what the view can show of this tree, it shows. A full budget
 	 * leaves later nodes pending for good (WorldResidency blocks the next), so `pending` cannot say this. */
 	get idle() {

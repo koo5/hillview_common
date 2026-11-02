@@ -7,12 +7,14 @@
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, type FlyLayout } from './flight';
 
-	let { layers = $bindable(), flyLayout = $bindable(), zoomKeys, ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), flyLayout = $bindable(), zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
 		/** which labels the flight keys go by (the keys themselves are physical) */
 		flyLayout: FlyLayout;
 		/** how the scene zooms, said after the flight keys (flight.ts ZoomKeys.label) */
 		zoomKeys: string;
+		/** earth answers: its ground can be chosen (without it the scene still flies, over the atlas) */
+		ground: boolean;
 		/** the channel has an orthophoto */
 		ortho: boolean;
 		/** the channel has city models */
@@ -47,14 +49,16 @@
 	</button>
 	{#if open}
 		<div class="panel" role="group" aria-label="Layers" data-testid="{testid}-layers">
-			<fieldset>
-				<legend>Ground</legend>
-				<label><input type="radio" bind:group={layers.terrain} value="bare" data-testid="{testid}-terrain-bare" /> bare terrain</label>
-				<label><input type="radio" bind:group={layers.terrain} value="surface" data-testid="{testid}-terrain-surface" /> surface (roofs, trees)</label>
-				{#if ortho}
-					<label><input type="checkbox" bind:checked={layers.ortho} data-testid="{testid}-ortho" /> aerial photo</label>
-				{/if}
-			</fieldset>
+			{#if ground}
+				<fieldset>
+					<legend>Ground</legend>
+					<label><input type="radio" bind:group={layers.terrain} value="bare" data-testid="{testid}-terrain-bare" /> bare terrain</label>
+					<label><input type="radio" bind:group={layers.terrain} value="surface" data-testid="{testid}-terrain-surface" /> surface (roofs, trees)</label>
+					{#if ortho}
+						<label><input type="checkbox" bind:checked={layers.ortho} data-testid="{testid}-ortho" /> aerial photo</label>
+					{/if}
+				</fieldset>
+			{/if}
 			{#if buildings || names}
 				<fieldset>
 					<legend>On the ground</legend>

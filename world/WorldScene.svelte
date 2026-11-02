@@ -102,6 +102,11 @@
 	let host: HTMLDivElement;
 	let error = $state<string | null>(null);
 	let earth = $state.raw<Earth | null>(null);
+	/** earth not answering: the scene runs without its layers (the operator, 11-02: earth down must not stop flight)
+	 * and asks again every EARTH_RETRY_MS */
+	let earthError = $state<string | null>(null);
+	const EARTH_RETRY_MS = 30_000;
+	let earthRetry: ReturnType<typeof setTimeout> | 0 = 0;
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
 	const orthoShown = $derived(layers.ortho && !!urls?.orthoUrl);
 	const buildingsShown = $derived(layers.buildings && !!urls?.modelsUrl);
@@ -145,6 +150,8 @@
 	let lastAsk = '';
 	/** the scene's frame: every earth layer is laid in it, and laid again when the observer outruns it */
 	let frame = $state.raw<Frame | null>(null);
+	/** the ground under the observer: the terrain's, else the last it gave; with neither (earth unreachable from the
+	 * start) the atlas's points there (AtlasCloud.groundAt), so the observer stands among them, not under them */
 	let ground: number | null = null;
 	let depthMode = $state<DepthMode | null>(null);
 	/** the terrain's tiles: ready/wanted, and whether none is still loading (what a test waits for) */
@@ -174,7 +181,7 @@
 	}
 
 	function ensureFrame() {
-		if (!three || !scene || !earth) return;
+		if (!three || !scene) return;
 		if (frame) {
 			const [e, n] = frame.fromGeodetic(lat, lon, 0);
 			if (Math.hypot(e, n) < REFRAME_M) return;
@@ -349,10 +356,10 @@
 
 	function render() {
 		raf = 0;
-		if (!renderer || !scene || !camera || !frame || !terrain) return;
+		if (!renderer || !scene || !camera || !frame) return;
 		if (!flying) {
-			ground = terrain.heightAt(lat, lon) ?? ground;
-			const at = frame.fromGeodetic(lat, lon, (ground ?? 0) + eyeM);
+			ground = terrain?.heightAt(lat, lon) ?? ground;
+			const at = frame.fromGeodetic(lat, lon, (ground ?? atlas?.groundAt(lat, lon) ?? 0) + eyeM);
 			const d = direction(bearing, pitch);
 			camera.position.set(...at);
 			camera.up.set(0, 0, 1);
@@ -367,7 +374,7 @@
 		const ask = gate.state(cam, v, performance.now());
 		if (ask === 'due') {
 			lastChange = performance.now();
-			terrain.update(cam, v);
+			terrain?.update(cam, v);
 			buildings?.update(cam, v);
 			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
 		}
@@ -387,8 +394,8 @@
 			depthTarget = null;
 			if (namesAttr || worldNames) drawNames(null);
 		}
-		const st = terrain.stats;
-		tiles = `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}`;
+		const st = terrain?.stats;
+		tiles = st ? `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}` : '';
 		if (atlas) {
 			const a = atlas.summary;
 			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
@@ -519,7 +526,7 @@
 	onMount(async () => {
 		if (atlasUrl) void labelAtlasVersions(atlasUrl);
 		try {
-			const [THREE, e] = await Promise.all([import('three'), loadEarth(earthUrl, channel, { signal: abort.signal })]);
+			const THREE = await import('three');
 			if (destroyed) return;
 			three = THREE;
 			({ renderer, depthMode } = createWorldRenderer(THREE, { reversed: true }));
@@ -533,7 +540,6 @@
 			observer = new ResizeObserver(resize);
 			observer.observe(host);
 			resize();
-			earth = e;
 			foldTimer = setTimeout(() => (autoFolded = true), 5000);
 			ensureFrame();
 			draw();
@@ -542,7 +548,24 @@
 		} finally {
 			loading = false;
 		}
+		void connectEarth();
 	});
+
+	/** earth's channel: its layers once it answers; until then the scene flies without them, and asks again */
+	async function connectEarth() {
+		earthRetry = 0;
+		try {
+			const e = await loadEarth(earthUrl, channel, { signal: abort.signal });
+			if (destroyed) return;
+			earthError = null;
+			earth = e;
+		} catch (e) {
+			if (destroyed) return;
+			earthError = `earth unreachable (${e instanceof Error ? e.message : String(e)}): no terrain, aerial photo or names; `
+				+ `asking again every ${EARTH_RETRY_MS / 1000} s`;
+			earthRetry = setTimeout(() => void connectEarth(), EARTH_RETRY_MS);
+		}
+	}
 
 	async function labelAtlasVersions(url: string) {
 		const found = await Promise.all(atlasChannels.map((ch) => loadPointer(url, ch, { signal: abort.signal }).then(
@@ -605,6 +628,7 @@
 		if (flyFrame) cancelAnimationFrame(flyFrame);
 		if (namesRepaint) cancelAnimationFrame(namesRepaint);
 		if (retry) clearTimeout(retry);
+		if (earthRetry) clearTimeout(earthRetry);
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
 		buildings?.dispose();
@@ -653,12 +677,13 @@
 	<!-- the loading overlay, as the workbench shows it; its own pointer and wheel, so its list scrolls and its controls
 		 click under the scene's capture -->
 	<div class="loading" role="region" aria-label="Loading" onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}
-		data-testid="{testid}-status" data-error={error ?? atlasError ?? ''}>
-		<WorldRequestPanel {requests} {progress} floating={false} system={error ?? (loading ? 'Loading the 3D world…' : atlasError ?? '')}
-			systemError={!!(error ?? atlasError)} />
+		data-testid="{testid}-status" data-error={error ?? earthError ?? atlasError ?? ''}>
+		<WorldRequestPanel {requests} {progress} floating={false}
+			system={error ?? (loading ? 'Loading the 3D world…' : earthError ?? atlasError ?? '')}
+			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
-	{#if earth}
-		<WorldSceneControls bind:layers bind:flyLayout zoomKeys={ZOOM_PLUS_MINUS.label} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+	{#if !loading && !error}
+		<WorldSceneControls bind:layers bind:flyLayout zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if flying}
