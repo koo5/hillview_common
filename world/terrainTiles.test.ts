@@ -177,7 +177,7 @@ describe('terrain tiles', () => {
 		expect(sh.fragmentShader).toContain('varying vec3 vShade;');
 		expect(sh.fragmentShader).not.toContain('#include <map_fragment>');
 		expect(sh.fragmentShader).not.toContain('#include <color_fragment>');
-		expect(sh.fragmentShader).toContain('vColor * ( 1.0 - photo.a ) + photo.rgb * vShade');
+		expect(sh.fragmentShader).toContain('vColor.rgb * ( 1.0 - photo.a ) + photo.rgb * vShade');
 		expect(mat.customProgramCacheKey()).toBe('world-ground');
 	});
 

@@ -556,11 +556,12 @@ export function groundMaterial(THREE: Three): THREE_NS.MeshBasicMaterial {
 	return m;
 }
 
+// vColor is a vec4 since three r16x (color_pars_fragment), the ramp in its rgb
 const GROUND_COLOR = `#ifdef USE_MAP
 	vec4 photo = texture2D( map, vMapUv );
-	diffuseColor.rgb = diffuseColor.rgb * vColor * ( 1.0 - photo.a ) + photo.rgb * vShade;
+	diffuseColor.rgb = diffuseColor.rgb * vColor.rgb * ( 1.0 - photo.a ) + photo.rgb * vShade;
 #else
-	diffuseColor.rgb *= vColor;
+	diffuseColor *= vColor;
 #endif`;
 
 /** Lay a loaded orthophoto on a tile's mesh: the photo, under the plain hillshade, the ramp where it has none. */
