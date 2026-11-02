@@ -645,6 +645,7 @@
 	{onfocusout}
 	tabindex="0"
 	data-flying={flying}
+	data-fov={fov.toFixed(2)}
 	role="application"
 	aria-label="3D world: drag to look around, scroll or pinch to rise; click it, then fly with the keys"
 >
