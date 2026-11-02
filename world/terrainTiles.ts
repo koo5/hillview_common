@@ -23,9 +23,11 @@
  * address as the terrain tile, so it lies on the grid with uv = (column, 1 - row) and no
  * reprojection. Same zoom is enough: selection keeps a cell near pixelError pixels on screen, and a
  * 256 px tile over 64 cells is four texels a cell. Only at maxZ, where the tiles stop splitting
- * though the camera comes closer, is it a mosaic of finer ortho tiles. With the photo on, the
- * vertex colours are a plain hillshade (the photo has its own shadows, so a soft one): the height
- * ramp would tint it. Where there is none (outside Czechia: earth answers 404) the ramp stays.
+ * though the camera comes closer, is it a mosaic of finer ortho tiles. Under the photo is a plain
+ * hillshade (the photo has its own shadows, so a soft one): the height ramp would tint it. Where
+ * there is none (outside Czechia: earth answers 404) the ramp stays -- and where the photo has no
+ * pixels (transparent: the overview before an area's sheets are fetched, a sheet's edge, the
+ * border) the ramp shows through it (groundMaterial). It drew black there until 2026-11-02 (ea09).
  */
 import type * as THREE_NS from 'three';
 import { Frame, type Vec3 } from './geodesy';
@@ -519,24 +521,51 @@ export function buildTileMesh(
 	const g = new THREE.BufferGeometry();
 	g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
 	g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+	g.setAttribute('shade', new THREE.BufferAttribute(shadeCol, 3));
 	g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 	g.setIndex(idx);
 	g.computeBoundingSphere();
-	const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-		vertexColors: true, side: THREE.DoubleSide,
-		// the ground sits a hair behind what stands on it: points, footprints, the grid
-		polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
-	}));
+	const m = new THREE.Mesh(g, groundMaterial(THREE));
 	m.position.set(centre[0], centre[1], centre[2]);
 	m.userData.tile = `${z}/${x}/${y}`;
-	m.userData.shadeColor = new THREE.BufferAttribute(shadeCol, 3);
 	return m;
 }
 
-/** Lay a loaded orthophoto on a tile's mesh: the photo, under the plain hillshade. */
+/**
+ * The ground's material: the height ramp ('color'), and once a photo is draped, the photo under the soft
+ * hillshade ('shade') wherever it has pixels, blended by its alpha. The photo is premultiplied
+ * (drapeOrtho's texture), so the ramp * (1 - a) + photo is right at its edges too, filtering adds no fringe.
+ * An opaque photo draws exactly as before: photo * shade.
+ */
+export function groundMaterial(THREE: Three): THREE_NS.MeshBasicMaterial {
+	const m = new THREE.MeshBasicMaterial({
+		vertexColors: true, side: THREE.DoubleSide,
+		// the ground sits a hair behind what stands on it: points, footprints, the grid
+		polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+	});
+	m.onBeforeCompile = (sh) => {
+		sh.vertexShader = sh.vertexShader
+			.replace('#include <color_pars_vertex>', '#include <color_pars_vertex>\nattribute vec3 shade;\nvarying vec3 vShade;')
+			.replace('#include <color_vertex>', '#include <color_vertex>\n\tvShade = shade;');
+		sh.fragmentShader = sh.fragmentShader
+			.replace('#include <color_pars_fragment>', '#include <color_pars_fragment>\nvarying vec3 vShade;')
+			.replace('#include <map_fragment>', '')
+			.replace('#include <color_fragment>', GROUND_COLOR);
+	};
+	m.customProgramCacheKey = () => 'world-ground';
+	return m;
+}
+
+const GROUND_COLOR = `#ifdef USE_MAP
+	vec4 photo = texture2D( map, vMapUv );
+	diffuseColor.rgb = diffuseColor.rgb * vColor * ( 1.0 - photo.a ) + photo.rgb * vShade;
+#else
+	diffuseColor.rgb *= vColor;
+#endif`;
+
+/** Lay a loaded orthophoto on a tile's mesh: the photo, under the plain hillshade, the ramp where it has none. */
 export function drapeOrtho(mesh: THREE_NS.Mesh, tex: THREE_NS.Texture) {
-	const g = mesh.geometry, mat = mesh.material as THREE_NS.MeshBasicMaterial;
-	if (mesh.userData.shadeColor) g.setAttribute('color', mesh.userData.shadeColor);
+	const mat = mesh.material as THREE_NS.MeshBasicMaterial;
 	mat.map = tex;
 	mat.needsUpdate = true;
 }
@@ -782,6 +811,7 @@ export class TerrainTiles {
 					if (!canvas) { t.ortho = 'none'; return; }
 					const tex = new this.THREE.CanvasTexture(canvas);
 					tex.colorSpace = this.THREE.SRGBColorSpace;
+					tex.premultiplyAlpha = true;          // groundMaterial blends by its alpha
 					tex.anisotropy = 4;
 					t.tex?.dispose();
 					t.tex = tex; t.ortho = 'ready';

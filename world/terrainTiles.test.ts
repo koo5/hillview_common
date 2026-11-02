@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Frame } from './geodesy';
 import { selectMapTiles } from './footprintTiles';
-import { budgetFor, buildTileMesh, decodeTile, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
+import { budgetFor, buildTileMesh, decodeTile, drapeOrtho, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
 import { maxDistance } from './worldLabels';
 
 const frame = new Frame(50.1619, 14.614, 44.55);
@@ -157,6 +157,28 @@ describe('terrain tiles', () => {
 		expect(pos.getZ(100) + m.position.z).toBeCloseTo(frame.fromGeodetic(lats[100], lons[100], 260)[2], 1);
 		// and a tile with no ground at all makes no mesh
 		expect(buildTileMesh(THREE, frame, z, x, y, new Float32Array(n * n).fill(NaN), n)).toBeNull();
+	});
+
+	it('the ground keeps the ramp and the hillshade, and blends a draped photo by its alpha (ea09)', () => {
+		const n = 65, z = 15, [x, y] = tileOf(50.187, 14.661, 15);
+		const m = buildTileMesh(THREE, frame, z, x, y, new Float32Array(n * n).fill(260), n)!;
+		const g = m.geometry, ramp = g.getAttribute('color').array.slice();
+		expect(g.getAttribute('shade').count).toBe(g.getAttribute('color').count);
+		// draping a photo leaves both colour sets as they are: the shader picks per pixel
+		drapeOrtho(m, new THREE.Texture());
+		expect(Array.from(g.getAttribute('color').array)).toEqual(Array.from(ramp));
+		// three's own basic shader, through the hook: every chunk it replaces is there (an upgrade that renamed
+		// one would leave the photo multiplied over black again, without an error)
+		const mat = m.material as THREE.MeshBasicMaterial;
+		const sh = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader,
+			uniforms: {}, defines: {} } as unknown as THREE.WebGLProgramParametersWithUniforms;
+		mat.onBeforeCompile(sh, {} as THREE.WebGLRenderer);
+		expect(sh.vertexShader).toContain('vShade = shade;');
+		expect(sh.fragmentShader).toContain('varying vec3 vShade;');
+		expect(sh.fragmentShader).not.toContain('#include <map_fragment>');
+		expect(sh.fragmentShader).not.toContain('#include <color_fragment>');
+		expect(sh.fragmentShader).toContain('vColor * ( 1.0 - photo.a ) + photo.rgb * vShade');
+		expect(mat.customProgramCacheKey()).toBe('world-ground');
 	});
 
 	it('fills a hole ring by ring from its edge, marks it, and leaves a hole too wide alone', () => {
