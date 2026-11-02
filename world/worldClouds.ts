@@ -7,7 +7,7 @@ export type DenseResolution = {
  expected_dense_points: number|null; included_dense_points: number; sparse_points: number; reason: string; provenance: FullSourceProvenance|null;
 };
 export type WorldResolution = 'stored'|'full';
-/** dense = points drawn. In a nearest-camera ownership world (overlap: 'nearest') owned_from is the run's
+/** dense = points drawn. In an ownership world (overlap: 'nearest' or 'drawn', ATLAS2's rules) owned_from is the run's
  *  source count before ownership, and the full-stream counts in dense_resolution describe that source. */
 export type WorldCloudCounts = { dense: number; sparse: number; resolution: DenseResolution|null; owned_from?: number };
 
@@ -17,7 +17,7 @@ export function worldCloudCounts(value: unknown, key: string, ids: string[], mod
 	const data=value as Record<string,unknown>;
 	const kinds=data.kinds as Record<string,unknown>|undefined;
 	if(data.schema!==3||data.resolution!==mode||data.key!==key||data.field!=='UserData'||kinds?.dense!==DENSE_CLOUD||Object.keys(kinds).length!==1||!Array.isArray(data.runs)||data.runs.length!==ids.length||
-		('overlap' in data&&data.overlap!=='nearest'))throw bad();
+		('overlap' in data&&data.overlap!=='nearest'&&data.overlap!=='drawn'))throw bad();
 	const owned='overlap' in data;
 	const result=new Map<string,WorldCloudCounts>();
 	for(const [index,row]of data.runs.entries()){

@@ -59,3 +59,9 @@ test('a nearest-ownership world draws the kept part and checks the full stream a
   {...manifest(),runs:value.runs}])
   expect(()=>worldCloudCounts(bad,key,['a','b'])).toThrow('rebuild');
 });
+
+test('a drawn-ownership world (the nearest drawing run per voxel) reads like a nearest one',()=>{
+ const value={...manifest(),overlap:'drawn',runs:manifest().runs.map(r=>({...r,dense:r.dense?180:0,owned_from:r.dense}))};
+ expect(worldCloudCounts(value,key,['a','b']).get('a')).toEqual({dense:180,sparse:0,resolution:resolution(true,200,0),owned_from:200});
+ expect(()=>worldCloudCounts({...value,runs:value.runs.map(({owned_from,...r})=>r)},key,['a','b'])).toThrow('rebuild');
+});
