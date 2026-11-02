@@ -85,6 +85,8 @@
 		position: absolute;
 		top: var(--world-scene-inset-top, 8px);
 		right: 8px;
+		/* the panel scrolls within the scene, however short a phone's split leaves it */
+		max-height: calc(100% - var(--world-scene-inset-top, 8px) - 8px);
 		display: flex;
 		flex-direction: column;
 		align-items: flex-end;
@@ -93,6 +95,7 @@
 		color: #1d2b3a;
 	}
 	.toggle {
+		flex: none;
 		display: grid;
 		place-items: center;
 		width: 36px;
@@ -111,8 +114,9 @@
 		fill: #1d2b3a;
 	}
 	.panel {
-		max-height: calc(100vh - 120px);
+		min-height: 0;
 		overflow: auto;
+		overscroll-behavior: contain;
 		padding: 6px 10px;
 		border-radius: 8px;
 		background: rgba(255, 255, 255, 0.95);
@@ -131,6 +135,12 @@
 		font-weight: 600;
 		font-size: 12px;
 		color: #4a5a6c;
+	}
+	/* no keys to fly with on a touch-only device */
+	@media (hover: none) and (pointer: coarse) {
+		.fly {
+			display: none;
+		}
 	}
 	.fly p {
 		max-width: 16em;
