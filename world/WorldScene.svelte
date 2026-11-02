@@ -139,6 +139,9 @@
 	/** placed/seen/considered names, as the workbench's data-names says them */
 	let namesAttr = $state('');
 	let namesRepaint = 0;
+	/** when the view or what it draws last changed, and the gate's last answer: what `settled` is judged on */
+	let lastChange = 0;
+	let lastAsk = '';
 	/** the scene's frame: every earth layer is laid in it, and laid again when the observer outruns it */
 	let frame = $state.raw<Frame | null>(null);
 	let ground: number | null = null;
@@ -316,7 +319,16 @@
 		const W = host.clientWidth || 1, H = host.clientHeight || 1;
 		worldNames ??= new WorldNames(three, {
 			// a verdict comes back a frame or more later: the names alone are painted again, nothing else is asked
-			onVerdict: () => { if (!namesRepaint && !destroyed) namesRepaint = requestAnimationFrame(() => { namesRepaint = 0; drawNames(null); }); }
+			onVerdict: () => {
+				if (!namesRepaint && !destroyed) namesRepaint = requestAnimationFrame(() => {
+					namesRepaint = 0;
+					drawNames(null);
+					settle();
+					// judged on a frame from before the last change (its probe was busy then): one more frame asks again,
+					// and the verdict after it is fresh, so this does not loop
+					if (labelPool && worldNames && worldNames.judgedAt < lastChange) draw();
+				});
+			}
 		});
 		if (!labelPool || !depthTarget) {
 			worldNames.clear(namesCanvas, W, H);
@@ -350,6 +362,7 @@
 		const v = cameraView(camera, scratch!, host.clientHeight || 800);
 		const ask = gate.state(cam, v, performance.now());
 		if (ask === 'due') {
+			lastChange = performance.now();
 			terrain.update(cam, v);
 			buildings?.update(cam, v);
 			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
@@ -365,6 +378,9 @@
 			drawNames(depthTarget.target.depthTexture);
 		} else {
 			renderer.render(scene, camera);
+			// no names, no target: half-float with 4 samples is ~37 MB of a phone's GPU (RECON-UI)
+			depthTarget?.dispose();
+			depthTarget = null;
 			if (namesAttr || worldNames) drawNames(null);
 		}
 		const st = terrain.stats;
@@ -374,8 +390,18 @@
 			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
 			atlasError = atlas.error;
 		}
-		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon' && atlasOpened !== 'opening' &&
-			(!atlas || (atlas.idle && !atlas.error)) && (!buildings || buildings.settled) && !labelPool?.stats.loading;
+		lastAsk = ask;
+		settle();
+	}
+
+	/** every layer loaded and quiet, and the names judged on a frame drawn since the last change (a verdict from
+	 * before the far terrain loaded took 1,600 of 1,650 names for seen: the workbench, 2026-10-02) */
+	function settle() {
+		const st = terrain?.stats;
+		if (!st) return;
+		settled = st.wanted > 0 && st.loading === 0 && lastAsk !== 'soon' && atlasOpened !== 'opening' &&
+			(!atlas || (atlas.idle && !atlas.error)) && (!buildings || buildings.settled) && !labelPool?.stats.loading &&
+			(!labelPool || !worldNames?.judging || worldNames.judgedAt >= lastChange);
 	}
 
 	/** ask for one frame; many asks before it lands are one frame */
