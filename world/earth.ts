@@ -7,7 +7,7 @@
  * year ČÚZK's terms want shown ("ČÚZK, <year>").
  */
 
-export type Releases = Partial<Record<'terrain' | 'ortho' | 'osm' | 'models', string>>;
+export type Releases = Partial<Record<'terrain' | 'ortho' | 'osm' | 'models' | 'names', string>>;
 export type TerrainModel = 'surface' | 'bare';
 
 /** a credit line's entry; `changes` is what was done to the source, where its licence asks it said (CC BY: IPR's) */
@@ -32,6 +32,8 @@ export type EarthLayers = {
 	osmUrl?: string;
 	/** the city models' manifest (cityModelTiles), when the channel has a models release */
 	modelsUrl?: string;
+	/** the names round a point (labelPool: the workbench's /terrain/labels answers alike), when it has names */
+	namesUrl?: string;
 };
 
 type Source = { text: string; url: string; licence: string; terms_url?: string; changes?: string };
@@ -57,13 +59,16 @@ export function layerUrls(earth: string, releases: Releases, model: TerrainModel
 		tileUrl: `${b}/t/${releases.terrain}/terrain/${model}/{z}/{x}/{y}.q16`,
 		orthoUrl: releases.ortho ? `${b}/t/${releases.ortho}/ortho/{z}/{x}/{y}.jpg` : undefined,
 		osmUrl: releases.osm ? `${b}/t/${releases.osm}/osm/{z}/{x}/{y}.mvt` : undefined,
-		modelsUrl: releases.models ? `${b}/t/${releases.models}/models/manifest.json` : undefined
+		modelsUrl: releases.models ? `${b}/t/${releases.models}/models/manifest.json` : undefined,
+		namesUrl: releases.names ? `${b}/t/${releases.names}/names` : undefined
 	};
 }
 
 /** the credit lines for the layers drawn: the terrain's sources, then the orthophoto with its year (`orthoYear` null
- * while it is not drawn), then IPR's buildings while they are */
-export function credits(sources: Record<string, Source>, orthoYear: string | null, models = false): Credit[] {
+ * while it is not drawn), IPR's buildings and OpenStreetMap's names while they are */
+export function credits(sources: Record<string, Source>, shown: { orthoYear: string | null; models?: boolean; names?: boolean }):
+	Credit[] {
+	const { orthoYear, models = false, names = false } = shown;
 	const out: Credit[] = [];
 	const source = (key: string) => {
 		const s = sources[key];
@@ -82,6 +87,10 @@ export function credits(sources: Record<string, Source>, orthoYear: string | nul
 		const s = source('ipr');
 		// CC BY asks the changes said: earth's attribution names them (I3S to GLB, the heights' datum)
 		out.push({ text: s.text, url: s.url, licence: s.licence, terms_url: s.terms_url, changes: s.changes });
+	}
+	if (names) {
+		const s = source('osm');
+		out.push({ text: s.text, url: s.url, licence: s.licence });
 	}
 	return out;
 }

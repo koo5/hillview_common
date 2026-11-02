@@ -9,8 +9,12 @@
 	 * moved view, a loaded tile, a resize.
 	 *
 	 * What is drawn is the viewer's choice (ea07, sceneLayers.ts): bare or surface ground, the orthophoto, IPR's
-	 * buildings, an atlas version or none, chosen in WorldSceneControls and kept per viewer under `layersKey`. Every
-	 * layer asks through one WorldRequests, which the loading overlay (WorldRequestPanel) reads.
+	 * buildings, an atlas version or none, place names, chosen in WorldSceneControls and kept per viewer under
+	 * `layersKey`. Every layer asks through one WorldRequests, which the loading overlay (WorldRequestPanel) reads.
+	 *
+	 * NAMES are the workbench's (labelPool.ts round the camera, worldNames.ts to draw them), from the channel's names
+	 * release. While they are shown the frame is drawn through a DepthTarget, so what the scene puts in front of a
+	 * name hides it, as in the workbench; a verdict that comes back later repaints the names alone.
 	 *
 	 * FLIGHT (ea07, flight.ts): with the scene focused, a fly key frees the camera from the app's location and flies it
 	 * as the workbench's viewer does. While it flies, its ground point and heading are written back (`onmove`,
@@ -25,8 +29,10 @@
 	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
 		savedFlyLayout, savedFlySpeed, zoomedFov, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
-	import { TerrainTiles, horizonM } from './terrainTiles';
-	import { createWorldRenderer, type DepthMode } from './renderer';
+	import { TerrainTiles, horizonM, zoomOf } from './terrainTiles';
+	import { DepthTarget, createWorldRenderer, type DepthMode } from './renderer';
+	import { LabelPool } from './labelPool';
+	import { WorldNames } from './worldNames';
 	import { ViewGate, cameraView } from './view';
 	import { AtlasCloud, atlasCredits, loadAtlas, loadPointer, type AtlasVersion } from './atlasCloud';
 	import type { CityModelTiles } from './cityModelTiles';
@@ -98,12 +104,14 @@
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
 	const orthoShown = $derived(layers.ortho && !!urls?.orthoUrl);
 	const buildingsShown = $derived(layers.buildings && !!urls?.modelsUrl);
+	const namesShown = $derived(layers.names && !!urls?.namesUrl);
 	/** the atlas version drawn: its licence and credits join the line */
 	let atlasVersion = $state.raw<AtlasVersion | null>(null);
 	/** the credit line names exactly the sources of what is drawn */
 	const credits = $derived.by((): Credit[] => {
 		if (!earth) return [];
-		const c = earthCredits(earth.sources, orthoShown ? earth.orthoYear : null, buildingsShown);
+		const c = earthCredits(earth.sources, { orthoYear: orthoShown ? earth.orthoYear : null, models: buildingsShown,
+			names: namesShown });
 		return atlasVersion ? atlasCredits(c, atlasVersion) : c;
 	});
 	/** the atlas versions offered, labelled by their pointers; a channel whose pointer cannot be read is not offered */
@@ -124,6 +132,13 @@
 	let camera: THREE_NS.PerspectiveCamera | null = null;
 	let terrain: TerrainTiles | null = null;
 	let buildings: CityModelTiles | null = null;
+	let labelPool: LabelPool | null = null;
+	let worldNames: WorldNames | null = null;
+	let depthTarget: DepthTarget | null = null;
+	let namesCanvas = $state<HTMLCanvasElement>();
+	/** placed/seen/considered names, as the workbench's data-names says them */
+	let namesAttr = $state('');
+	let namesRepaint = 0;
 	/** the scene's frame: every earth layer is laid in it, and laid again when the observer outruns it */
 	let frame = $state.raw<Frame | null>(null);
 	let ground: number | null = null;
@@ -284,6 +299,38 @@
 		});
 	}
 
+	/** the names round the camera, for this frame, while they are shown */
+	$effect(() => {
+		const f = frame, url = namesShown ? urls?.namesUrl : undefined;
+		untrack(() => {
+			labelPool?.dispose();
+			labelPool = null;
+			if (f && url) labelPool = new LabelPool({ url, frame: f, requests, onChange: changed });
+			draw();
+		});
+	});
+
+	/** project, probe (with the frame's depth), lay out and paint the names; `depth` null paints the last verdicts */
+	function drawNames(depth: THREE_NS.Texture | null) {
+		if (!namesCanvas || !camera || !renderer || !three) return;
+		const W = host.clientWidth || 1, H = host.clientHeight || 1;
+		worldNames ??= new WorldNames(three, {
+			// a verdict comes back a frame or more later: the names alone are painted again, nothing else is asked
+			onVerdict: () => { if (!namesRepaint && !destroyed) namesRepaint = requestAnimationFrame(() => { namesRepaint = 0; drawNames(null); }); }
+		});
+		if (!labelPool || !depthTarget) {
+			worldNames.clear(namesCanvas, W, H);
+			namesAttr = '';
+			return;
+		}
+		labelPool.update(camera.position.toArray() as Vec3);
+		const t = terrain;
+		const list = labelPool.named(t ? (la, lo) => t.heightAt(la, lo) : null, t?.version ?? -1, [0, 0, 0]);
+		const r = worldNames.draw(namesCanvas, W, H, { renderer, camera, list, depth, depthHeight: depthTarget.target.height,
+			reversed: depthMode === 'reversed', relief: null, zoom: zoomOf(cameraView(camera, scratch!, H)) });
+		if (r) namesAttr = `${r.placed}/${r.seen}/${r.items}${labelPool.stats.loading ? ' loading' : ''}`;
+	}
+
 	function render() {
 		raf = 0;
 		if (!renderer || !scene || !camera || !frame || !terrain) return;
@@ -309,7 +356,17 @@
 		}
 		// drawn only on change: a view the gate held back is asked for once its interval is up
 		else if (ask === 'soon' && !retry) retry = setTimeout(() => { retry = 0; draw(); }, gate.interval);
-		renderer.render(scene, camera);
+		if (labelPool) {
+			// drawn where its depth can be read, so the names can be judged against it
+			const size = renderer.getDrawingBufferSize(new three!.Vector2());
+			depthTarget ??= new DepthTarget(three!, size.x, size.y, depthMode ?? 'standard');
+			depthTarget.setSize(size.x, size.y);
+			depthTarget.render(renderer, scene, camera);
+			drawNames(depthTarget.target.depthTexture);
+		} else {
+			renderer.render(scene, camera);
+			if (namesAttr || worldNames) drawNames(null);
+		}
 		const st = terrain.stats;
 		tiles = `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}`;
 		if (atlas) {
@@ -318,7 +375,7 @@
 			atlasError = atlas.error;
 		}
 		settled = st.wanted > 0 && st.loading === 0 && ask !== 'soon' && atlasOpened !== 'opening' &&
-			(!atlas || (atlas.idle && !atlas.error)) && (!buildings || buildings.settled);
+			(!atlas || (atlas.idle && !atlas.error)) && (!buildings || buildings.settled) && !labelPool?.stats.loading;
 	}
 
 	/** ask for one frame; many asks before it lands are one frame */
@@ -516,10 +573,14 @@
 		abort.abort();
 		if (raf) cancelAnimationFrame(raf);
 		if (flyFrame) cancelAnimationFrame(flyFrame);
+		if (namesRepaint) cancelAnimationFrame(namesRepaint);
 		if (retry) clearTimeout(retry);
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
 		buildings?.dispose();
+		labelPool?.dispose();
+		worldNames?.dispose();
+		depthTarget?.dispose();
 		terrain?.dispose();
 		requests.dispose();
 		observer?.disconnect();
@@ -542,6 +603,7 @@
 	data-settled={settled}
 	data-atlas={atlasState}
 	data-layers={JSON.stringify(layers)}
+	data-names={namesAttr}
 	{onpointerdown}
 	{onpointermove}
 	{onpointerup}
@@ -555,6 +617,7 @@
 	role="application"
 	aria-label="3D world: drag to look around, scroll or pinch to rise; click it, then fly with the keys"
 >
+	<canvas class="names" bind:this={namesCanvas} data-testid="{testid}-names"></canvas>
 	<!-- the loading overlay, as the workbench shows it; its own pointer and wheel, so its list scrolls and its controls
 		 click under the scene's capture -->
 	<div class="loading" role="region" aria-label="Loading" onpointerdown={(e) => e.stopPropagation()} onwheel={(e) => e.stopPropagation()}
@@ -563,7 +626,8 @@
 			systemError={!!(error ?? atlasError)} />
 	</div>
 	{#if earth}
-		<WorldSceneControls bind:layers bind:flyLayout ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} atlas={atlasOptions} {testid} />
+		<WorldSceneControls bind:layers bind:flyLayout ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if flying}
 		<div class="flight" role="status" data-testid="{testid}-flight" onpointerdown={(e) => e.stopPropagation()}>
@@ -604,6 +668,12 @@
 		display: block;
 		width: 100%;
 		height: 100%;
+	}
+	/* over the WebGL canvas, under every control; the pointer goes through to the scene */
+	.names {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
 	}
 	/* a host whose own UI overlaps the scene's top edge moves the overlay and the controls clear with
 	   --world-scene-inset-top; the overlay stops short of the controls' button */

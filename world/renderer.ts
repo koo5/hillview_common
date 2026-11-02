@@ -34,3 +34,47 @@ export function createWorldRenderer(THREE: typeof THREE_NS, opts: { reversed: bo
 	renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
 	return { renderer, depthMode };
 }
+
+/**
+ * The frame drawn into a target whose depth can be read back (DepthProbe: which names the scene hides), then put on
+ * the screen as drawn. A scene renders through it only while something reads its depth; MSAA as the canvas has it.
+ */
+export class DepthTarget {
+	readonly target: THREE_NS.WebGLRenderTarget;
+	private quadScene: THREE_NS.Scene;
+	private quadCam: THREE_NS.OrthographicCamera;
+	private quad: THREE_NS.Mesh;
+
+	constructor(THREE: typeof THREE_NS, w: number, h: number, depthMode: DepthMode) {
+		this.target = new THREE.WebGLRenderTarget(w, h, {
+			// linear colour through the copy, as the canvas would have it
+			type: THREE.HalfFloatType,
+			samples: 4,
+			depthTexture: new THREE.DepthTexture(w, h, depthMode === 'reversed' ? THREE.FloatType : undefined)
+		});
+		this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2),
+			new THREE.MeshBasicMaterial({ map: this.target.texture, depthTest: false, depthWrite: false }));
+		this.quadScene = new THREE.Scene();
+		this.quadScene.add(this.quad);
+		this.quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+	}
+
+	setSize(w: number, h: number) {
+		if (this.target.width !== w || this.target.height !== h) this.target.setSize(w, h);
+	}
+
+	render(renderer: THREE_NS.WebGLRenderer, scene: THREE_NS.Scene, camera: THREE_NS.Camera) {
+		renderer.setRenderTarget(this.target);
+		renderer.clear();
+		renderer.render(scene, camera);
+		renderer.setRenderTarget(null);
+		renderer.render(this.quadScene, this.quadCam);
+	}
+
+	dispose() {
+		this.target.depthTexture?.dispose();
+		this.target.dispose();
+		this.quad.geometry.dispose();
+		(this.quad.material as THREE_NS.Material).dispose();
+	}
+}

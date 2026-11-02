@@ -7,7 +7,7 @@
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, type FlyLayout } from './flight';
 
-	let { layers = $bindable(), flyLayout = $bindable(), ortho, buildings, atlas, testid }: {
+	let { layers = $bindable(), flyLayout = $bindable(), ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
 		/** which labels the flight keys go by (the keys themselves are physical) */
 		flyLayout: FlyLayout;
@@ -15,6 +15,8 @@
 		ortho: boolean;
 		/** the channel has city models */
 		buildings: boolean;
+		/** the channel has place names */
+		names: boolean;
 		/** the atlas versions offered, each with what its pointer says; empty without an atlas */
 		atlas: { channel: string; label: string }[];
 		testid: string;
@@ -51,10 +53,15 @@
 					<label><input type="checkbox" bind:checked={layers.ortho} data-testid="{testid}-ortho" /> aerial photo</label>
 				{/if}
 			</fieldset>
-			{#if buildings}
+			{#if buildings || names}
 				<fieldset>
-					<legend>Buildings</legend>
-					<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" /> Prague 3D buildings</label>
+					<legend>On the ground</legend>
+					{#if names}
+						<label><input type="checkbox" bind:checked={layers.names} data-testid="{testid}-names-toggle" /> place names</label>
+					{/if}
+					{#if buildings}
+						<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" /> Prague 3D buildings</label>
+					{/if}
 				</fieldset>
 			{/if}
 			<fieldset class="fly">

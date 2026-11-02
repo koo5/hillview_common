@@ -6,6 +6,7 @@ const SOURCES = {
 	glo30: { text: 'Copernicus WorldDEM-30', url: 'https://spacedata.copernicus.eu', licence: 'GLO-30' },
 	etopo: { text: 'ETOPO 2022', url: 'https://doi.org/10.25921/fd45-gt74', licence: 'public domain' },
 	'cuzk-ortho': { text: 'ČÚZK, {year}', url: 'https://geoportal.cuzk.gov.cz', licence: 'CC BY 4.0', terms_url: 'https://cuzk.gov.cz/terms' },
+	osm: { text: '© OpenStreetMap contributors', url: 'https://www.openstreetmap.org/copyright', licence: 'ODbL 1.0' },
 	ipr: { text: 'datový podklad © IPR Praha', url: 'https://geoportalpraha.cz', licence: 'CC BY 4.0', terms_url: 'https://geoportalpraha.cz/terms',
 		changes: 'I3S to GLB; EGM96 heights converted to WGS84 ellipsoidal heights' }
 };
@@ -25,14 +26,15 @@ function earthStub(channel: Record<string, string>, orthoSources: Record<string,
 
 describe('earth', () => {
 	it('addresses every layer by its release id, never by the channel', () => {
-		const u = layerUrls('https://earth.example/', { terrain: 'terrain-a', ortho: 'ortho-b', osm: 'osm-c', models: 'models-d' }, 'surface');
+		const u = layerUrls('https://earth.example/', { terrain: 'terrain-a', ortho: 'ortho-b', osm: 'osm-c', models: 'models-d', names: 'names-e' }, 'surface');
 		expect(u.tileUrl).toBe('https://earth.example/t/terrain-a/terrain/surface/{z}/{x}/{y}.q16');
 		expect(u.orthoUrl).toBe('https://earth.example/t/ortho-b/ortho/{z}/{x}/{y}.jpg');
 		expect(u.osmUrl).toBe('https://earth.example/t/osm-c/osm/{z}/{x}/{y}.mvt');
 		expect(u.modelsUrl).toBe('https://earth.example/t/models-d/models/manifest.json');
+		expect(u.namesUrl).toBe('https://earth.example/t/names-e/names');
 		expect(layerUrls('https://e', { terrain: 't' }, 'bare').tileUrl).toContain('/terrain/bare/');
 		const none = layerUrls('https://e', { terrain: 't' }, 'bare');
-		expect([none.orthoUrl, none.osmUrl, none.modelsUrl]).toEqual([undefined, undefined, undefined]);
+		expect([none.orthoUrl, none.osmUrl, none.modelsUrl, none.namesUrl]).toEqual([undefined, undefined, undefined, undefined]);
 	});
 
 	it('refuses a channel without terrain', () => {
@@ -40,17 +42,18 @@ describe('earth', () => {
 	});
 
 	it('credits the terrain sources, then the orthophoto with its year, then the buildings: only what is drawn', () => {
-		const c = credits(SOURCES, '2024-2025');
+		const c = credits(SOURCES, { orthoYear: '2024-2025' });
 		expect(c.map((x) => x.text)).toEqual(['© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0)', 'Copernicus WorldDEM-30', 'ETOPO 2022',
 			'ČÚZK, 2024-2025']);
 		expect(c[3].terms_url).toBe('https://cuzk.gov.cz/terms');
-		expect(credits(SOURCES, null)).toHaveLength(3);
-		expect(() => credits({ ...SOURCES, glo30: undefined } as never, null)).toThrow(/glo30/);
-		const all = credits(SOURCES, '2024-2025', true);
+		expect(credits(SOURCES, { orthoYear: null })).toHaveLength(3);
+		expect(() => credits({ ...SOURCES, glo30: undefined } as never, { orthoYear: null })).toThrow(/glo30/);
+		const all = credits(SOURCES, { orthoYear: '2024-2025', models: true });
 		expect(all.at(-1)).toEqual({ text: 'datový podklad © IPR Praha', url: 'https://geoportalpraha.cz', licence: 'CC BY 4.0',
 			terms_url: 'https://geoportalpraha.cz/terms', changes: 'I3S to GLB; EGM96 heights converted to WGS84 ellipsoidal heights' });
-		expect(credits(SOURCES, null, true).map((x) => x.text).at(-2)).toBe('ETOPO 2022');
-		expect(() => credits({ ...SOURCES, ipr: undefined } as never, null, true)).toThrow(/ipr/);
+		expect(credits(SOURCES, { orthoYear: null, models: true }).map((x) => x.text).at(-2)).toBe('ETOPO 2022');
+		expect(() => credits({ ...SOURCES, ipr: undefined } as never, { orthoYear: null, models: true })).toThrow(/ipr/);
+		expect(credits(SOURCES, { orthoYear: null, names: true }).at(-1)?.text).toBe('© OpenStreetMap contributors');
 	});
 
 	it('loads a channel: its releases, sources and the ortho year', async () => {
