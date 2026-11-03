@@ -7,7 +7,7 @@
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { Frame, rigid, type Vec3 } from './geodesy';
+import { Frame, carryDir, carryPoint, rigid, type Vec3 } from './geodesy';
 import { localAxes } from './compass';
 import { pxPerRad, type View } from './terrainTiles';
 import { WorldRequests, RequestFailure, responseOrThrow } from './worldRequests';
@@ -126,6 +126,16 @@ export function validateCityGlb(bytes: ArrayBuffer, asset: CityAsset) {
 	}
 }
 
+/** a mesh's group placed at its anchor in `frame`: east, up and south as its x, y and z (glTF's y-up) */
+export function placeAsset(group: THREE.Group, frame: Frame, anchor: Vec3): THREE.Group {
+	const position = frame.fromGeodetic(...anchor);
+	const axes = localAxes(frame, position);
+	group.position.set(...position);
+	group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+		new THREE.Vector3(...axes.e), new THREE.Vector3(...axes.u), new THREE.Vector3(...axes.n).negate()));
+	return group;
+}
+
 export class CityModelTiles {
 	readonly group = new THREE.Group();
 	private manifest?: CityManifest;
@@ -155,8 +165,12 @@ export class CityModelTiles {
 	/** the scene was laid out about another origin: the loaded meshes carried there in one rigid move (terrainTiles') */
 	setFrame(next: Frame) {
 		if (next === this.o.frame) return;
-		const m = new THREE.Matrix4().set(...(rigid(this.o.frame, next) as Parameters<THREE.Matrix4['set']>));
-		for (const r of this.resident.values()) r.group.applyMatrix4(m);
+		const r = rigid(this.o.frame, next);
+		const m = new THREE.Matrix4().set(...(r as Parameters<THREE.Matrix4['set']>));
+		for (const res of this.resident.values()) res.group.applyMatrix4(m);
+		// the camera it last selected for, carried too: composing now sizes the meshes from where the camera is
+		if (this.camera) this.camera = carryPoint(r, this.camera);
+		if (this.view) this.view = { ...this.view, dir: carryDir(r, this.view.dir) };
 		this.o.frame = next;
 		this.compose();
 	}
@@ -201,12 +215,7 @@ export class CityModelTiles {
 					}
 					const gltf = await new GLTFLoader().parseAsync(bytes, '');
 					if (signal.aborted || this.disposed) { dispose(gltf.scene); signal.throwIfAborted(); return; }
-					const position = this.o.frame.fromGeodetic(...asset.anchor);
-					const axes = localAxes(this.o.frame, position);
-					const group = new THREE.Group();
-					group.position.set(...position);
-					group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
-						new THREE.Vector3(...axes.e), new THREE.Vector3(...axes.u), new THREE.Vector3(...axes.n).negate()));
+					const group = placeAsset(new THREE.Group(), this.o.frame, asset.anchor);
 					group.add(gltf.scene); group.userData.cityModel = asset;
 					group.visible = this.desired.some(a => a.id === asset.id);
 					this.resident.set(asset.id, { group, bytes: asset.bytes, used: this.tick });

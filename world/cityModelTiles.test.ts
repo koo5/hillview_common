@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { Frame } from './geodesy';
-import { MAX_BYTES, MAX_TRIANGLES, selectCityAssets, validateManifest, type CityAsset } from './cityModelTiles';
+import * as THREE from 'three';
+import { CityModelTiles, MAX_BYTES, MAX_TRIANGLES, placeAsset, selectCityAssets, validateManifest, type CityAsset } from './cityModelTiles';
+import { WorldRequests } from './worldRequests';
 
 const sha = 'a'.repeat(64);
 const asset: CityAsset = { id: 'ipr/1/925/0', url: `assets/${sha}.glb`, sha256: sha, bytes: 1000,
@@ -34,6 +36,19 @@ describe('prepared city-model admission', () => {
 		expect(capped).toBe(90 - desired.length);
 		expect(selectCityAssets([asset], frame, [0, 500, 0], { dir: [0, 1, 0], fovY: 60, aspect: 1, heightPx: 800 }).desired).toHaveLength(0);
 		expect(selectCityAssets([asset], frame, [0, -5000, 0], { dir: [0, 1, 0], fovY: 60, aspect: 1, heightPx: 800 }).desired).toHaveLength(0);
+	});
+	test('a re-layout carries a loaded mesh where one placed in the new frame stands', () => {
+		const a = new Frame(50.0875, 14.4214, 0), b = new Frame(50.0, 14.68, 0);
+		const city = new CityModelTiles({ manifestUrl: url, frame: a, requests: new WorldRequests(), onChange: () => {} });
+		const group = placeAsset(new THREE.Group(), a, asset.anchor);
+		(city as unknown as { resident: Map<string, object> }).resident.set(asset.id, { group, bytes: 1, used: 0 });
+		city.setFrame(b);
+		const want = placeAsset(new THREE.Group(), b, asset.anchor);
+		group.updateMatrixWorld(true); want.updateMatrixWorld(true);
+		for (const p of [[0, 0, 0], [50, 20, -30]] as const) {
+			const va = new THREE.Vector3(...p).applyMatrix4(group.matrixWorld), vb = new THREE.Vector3(...p).applyMatrix4(want.matrixWorld);
+			expect(va.distanceTo(vb)).toBeLessThan(0.01);
+		}
 	});
 	test('a zoom brings a far mesh in, and leaves out what is off to the side (the reach is on screen, not in metres)', () => {
 		const frame = new Frame(50.09, 14.4, 324);

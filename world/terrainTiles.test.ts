@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Frame } from './geodesy';
 import { selectMapTiles } from './footprintTiles';
-import { budgetFor, buildTileMesh, decodeTile, drapeOrtho, photoDz, screenSizePx, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
+import { TerrainTiles, budgetFor, buildTileMesh, decodeTile, drapeOrtho, photoDz, screenSizePx, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
 import { maxDistance } from './worldLabels';
+import { WorldRequests } from './worldRequests';
 
 const frame = new Frame(50.1619, 14.614, 44.55);
 // as the viewer selects: from the whole earth (zoom 0), as far as the horizon
@@ -212,6 +213,25 @@ describe('terrain tiles', () => {
 		expect(photoDz(9, 1.5, 18, 20)).toBeNull();
 		expect(photoDz(8, 3, 18, 20)).toBe(-2);                   // never coarser than z6
 		expect(photoDz(6, 3, 18, 20)).toBe(-0);
+	});
+
+	it('a re-layout carries a built tile: its vertices land where the same tile built in the new frame has them', () => {
+		const a = new Frame(50.0875, 14.4214, 0), b = new Frame(50.0, 14.68, 0);     // ~20 km apart
+		const n = 65, z = 15, [x, y] = tileOf(50.05, 14.55, z);
+		const h = new Float32Array(n * n).fill(300);
+		const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', frame: a, requests: new WorldRequests(), globe: false });
+		const mesh = buildTileMesh(THREE, a, z, x, y, h, n)!;
+		(tt as unknown as { tiles: Map<string, object> }).tiles.set(`${z}/${x}/${y}`, { key: `${z}/${x}/${y}`, z, x, y, state: 'ready', mesh, used: 0 });
+		tt.setFrame(b);
+		const want = buildTileMesh(THREE, b, z, x, y, h, n)!;
+		mesh.updateMatrixWorld(true); want.updateMatrixWorld(true);
+		const pa = mesh.geometry.getAttribute('position'), pb = want.geometry.getAttribute('position');
+		for (const i of [0, 64, 2112, 4224]) {
+			const va = new THREE.Vector3().fromBufferAttribute(pa, i).applyMatrix4(mesh.matrixWorld);
+			const vb = new THREE.Vector3().fromBufferAttribute(pb, i).applyMatrix4(want.matrixWorld);
+			expect(va.distanceTo(vb)).toBeLessThan(0.01);
+		}
+		expect(tt.o.frame).toBe(b);
 	});
 
 	it('fills a hole ring by ring from its edge, marks it, and leaves a hole too wide alone', () => {

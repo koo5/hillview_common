@@ -30,7 +30,7 @@
  * border) the ramp shows through it (groundMaterial). It drew black there until 2026-11-02 (ea09).
  */
 import type * as THREE_NS from 'three';
-import { Frame, rigid, type Vec3 } from './geodesy';
+import { Frame, carryDir, carryPoint, rigid, type Vec3 } from './geodesy';
 import { WorldRequests, RequestFailure, failureOf, responseOrThrow, requestHeaders } from './worldRequests';
 
 type Three = typeof THREE_NS;
@@ -877,7 +877,6 @@ export class TerrainTiles {
 		this.evict();
 	}
 
-	/** the photo zoom this tile wants now (photoDz), null for none: outside the photo's coverage, too small on screen */
 	/**
 	 * The scene was laid out about another origin (WorldScene's re-layout, every 20 km): what is built is carried there
 	 * in one rigid move, and what loads from now on is built in it. It was all dropped and asked again until 2026-11-03
@@ -885,12 +884,16 @@ export class TerrainTiles {
 	 */
 	setFrame(next: Frame) {
 		if (next === this.o.frame) return;
-		const m = new this.THREE.Matrix4().set(...(rigid(this.o.frame, next) as Parameters<THREE_NS.Matrix4['set']>));
+		const r = rigid(this.o.frame, next);
+		const m = new this.THREE.Matrix4().set(...(r as Parameters<THREE_NS.Matrix4['set']>));
 		for (const t of this.tiles.values()) t.mesh?.applyMatrix4(m);
 		this.globe?.applyMatrix4(m);
+		// where it was last looked from, carried too: a photo asked before the next update is sized from the right place
+		if (this.looked) this.looked = { cam: carryPoint(r, this.looked.cam), view: { ...this.looked.view, dir: carryDir(r, this.looked.view.dir) } };
 		this.o.frame = next;
 	}
 
+	/** the photo zoom this tile wants now (photoDz), null for none: outside the photo's coverage, too small on screen */
 	private photoDzOf(t: Tile): number | null {
 		const ex = this.o.orthoExtent;
 		if (ex) {
