@@ -30,7 +30,7 @@
  * border) the ramp shows through it (groundMaterial). It drew black there until 2026-11-02 (ea09).
  */
 import type * as THREE_NS from 'three';
-import { Frame, type Vec3 } from './geodesy';
+import { Frame, rigid, type Vec3 } from './geodesy';
 import { WorldRequests, RequestFailure, failureOf, responseOrThrow, requestHeaders } from './worldRequests';
 
 type Three = typeof THREE_NS;
@@ -779,7 +779,7 @@ export class TerrainTiles {
 	/** bumped whenever a tile becomes ready: what heightAt answers may have changed */
 	version = 0;
 	/** the earth under the tiles (buildGlobe) */
-	readonly globe?: THREE_NS.Mesh;
+	globe?: THREE_NS.Mesh;
 	readonly o: Required<Omit<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl' | 'orthoExtent'>> &
 		Pick<TerrainOptions, 'onChange' | 'requests' | 'globe' | 'orthoUrl' | 'orthoExtent'>;
 	private orthoScope: string;
@@ -878,6 +878,19 @@ export class TerrainTiles {
 	}
 
 	/** the photo zoom this tile wants now (photoDz), null for none: outside the photo's coverage, too small on screen */
+	/**
+	 * The scene was laid out about another origin (WorldScene's re-layout, every 20 km): what is built is carried there
+	 * in one rigid move, and what loads from now on is built in it. It was all dropped and asked again until 2026-11-03
+	 * (flying 30 km out of Prague: '0/218' tiles, and with no ground under it the camera went 1 km below it).
+	 */
+	setFrame(next: Frame) {
+		if (next === this.o.frame) return;
+		const m = new this.THREE.Matrix4().set(...(rigid(this.o.frame, next) as Parameters<THREE_NS.Matrix4['set']>));
+		for (const t of this.tiles.values()) t.mesh?.applyMatrix4(m);
+		this.globe?.applyMatrix4(m);
+		this.o.frame = next;
+	}
+
 	private photoDzOf(t: Tile): number | null {
 		const ex = this.o.orthoExtent;
 		if (ex) {

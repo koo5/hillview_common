@@ -195,6 +195,8 @@
 		}
 		frame = next;
 		atlas?.setScene(frame);
+		terrain?.setFrame(next);
+		buildings?.setFrame(next);
 	}
 
 	/** what loaded says where the ground is, and so what is in view: choose again */
@@ -203,33 +205,34 @@
 		draw();
 	}
 
-	/** the ground, for this frame, model and orthophoto: laid again whenever one of them changes */
+	/** the ground, for this model and orthophoto: laid again whenever one of them changes; a re-layout of the frame
+	 * only moves it (ensureFrame, setFrame) */
 	$effect(() => {
-		const f = frame, tileUrl = urls?.tileUrl, orthoUrl = orthoShown ? urls?.orthoUrl : undefined;
-		if (!f || !tileUrl) return;
+		const up = sceneUp, tileUrl = urls?.tileUrl, orthoUrl = orthoShown ? urls?.orthoUrl : undefined;
+		if (!up || !tileUrl) return;
 		untrack(() => {
 			terrain?.dispose();
 			ground = null;
-			terrain = new TerrainTiles(three!, { tileUrl, orthoUrl, orthoExtent: earth?.orthoExtent ?? undefined, frame: f, requests, onChange: changed });
+			terrain = new TerrainTiles(three!, { tileUrl, orthoUrl, orthoExtent: earth?.orthoExtent ?? undefined, frame: frame!, requests, onChange: changed });
 			scene!.add(terrain.group);
 			changed();
 		});
 	});
 
-	/** IPR's buildings, for this frame, while they are shown (their module only loads once they are) */
+	/** IPR's buildings, while they are shown (their module only loads once they are); a re-layout only moves them */
 	let buildingsGeneration = 0;
 	$effect(() => {
-		const f = frame, manifestUrl = buildingsShown ? urls?.modelsUrl : undefined;
+		const up = sceneUp, manifestUrl = buildingsShown ? urls?.modelsUrl : undefined;
 		const generation = ++buildingsGeneration;
 		untrack(() => {
 			buildings?.dispose();
 			buildings = null;
 			draw();
 		});
-		if (!f || !manifestUrl) return;
+		if (!up || !manifestUrl) return;
 		import('./cityModelTiles').then(({ CityModelTiles }) => {
-			if (destroyed || generation !== buildingsGeneration) return;
-			buildings = new CityModelTiles({ manifestUrl, frame: f, requests, onChange: changed });
+			if (destroyed || generation !== buildingsGeneration || !frame) return;
+			buildings = new CityModelTiles({ manifestUrl, frame, requests, onChange: changed });
 			scene!.add(buildings.group);
 			changed();
 		}).catch((e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
@@ -381,6 +384,8 @@
 	let standOn = 0;
 	let groundFrom = '';
 	let readout = $state('');
+	/** the city models' drawn, loading and capped counts (data-buildings, for checks) */
+	let buildingsAttr = $state('');
 	/** the height readout (layers.readout): the camera, the ground under it and where it came from; heights are
 	 * ellipsoidal, as earth serves them (sea level here is ~44 m) */
 	function readoutOf(cam: Vec3): string {
@@ -439,6 +444,10 @@
 		}
 		const st = terrain?.stats;
 		tiles = st ? `${st.ready}/${st.wanted}${st.failed ? ` failed ${st.failed}` : ''}` : '';
+		if (buildings) {
+			const b = buildings.stats;
+			buildingsAttr = `${b.drawn} drawn, ${b.loading} loading, ${b.capped} capped`;
+		} else buildingsAttr = '';
 		if (atlas) {
 			const a = atlas.summary;
 			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
@@ -745,6 +754,10 @@
 	data-flying={flying}
 	data-fov={fov.toFixed(2)}
 	data-eye-m={eyeM.toFixed(1)}
+	data-bearing={bearing.toFixed(2)}
+	data-pitch={pitch.toFixed(2)}
+	data-buildings={buildingsAttr}
+	data-frame={frame ? `${frame.lat.toFixed(4)},${frame.lon.toFixed(4)}` : ''}
 	data-fly-speed={flySpeed.toFixed(1)}
 	role="application"
 	aria-label="3D world: drag to look around, the stick or a pinch to rise, scroll for the fly speed; click it, then fly with the keys"

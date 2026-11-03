@@ -35,4 +35,14 @@ describe('prepared city-model admission', () => {
 		expect(selectCityAssets([asset], frame, [0, 500, 0], { dir: [0, 1, 0], fovY: 60, aspect: 1, heightPx: 800 }).desired).toHaveLength(0);
 		expect(selectCityAssets([asset], frame, [0, -5000, 0], { dir: [0, 1, 0], fovY: 60, aspect: 1, heightPx: 800 }).desired).toHaveLength(0);
 	});
+	test('a zoom brings a far mesh in, and leaves out what is off to the side (the reach is on screen, not in metres)', () => {
+		const frame = new Frame(50.09, 14.4, 324);
+		const big = { ...asset, radius: 400 };
+		const wide = { dir: [0, 1, 0] as [number, number, number], fovY: 55, aspect: 1.6, heightPx: 800 };
+		// 30 km off: a few pixels at 55 degrees, ~200 px zoomed to 3
+		expect(selectCityAssets([big], frame, [0, -30_000, 0], wide).desired).toHaveLength(0);
+		expect(selectCityAssets([big], frame, [0, -30_000, 0], { ...wide, fovY: 3 }).desired).toHaveLength(1);
+		// zoomed, a mesh 5 km to the side of the line of sight is out of view
+		expect(selectCityAssets([big], frame, [5000, -30_000, 0], { ...wide, fovY: 3 }).desired).toHaveLength(0);
+	});
 });

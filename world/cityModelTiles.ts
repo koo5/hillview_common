@@ -7,9 +7,9 @@
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { Frame, type Vec3 } from './geodesy';
+import { Frame, rigid, type Vec3 } from './geodesy';
 import { localAxes } from './compass';
-import type { View } from './terrainTiles';
+import { pxPerRad, type View } from './terrainTiles';
 import { WorldRequests, RequestFailure, responseOrThrow } from './worldRequests';
 
 export type CityAsset = { id: string; url: string; sha256: string; bytes: number; triangles: number;
@@ -17,11 +17,15 @@ export type CityAsset = { id: string; url: string; sha256: string; bytes: number
 export type CityManifest = { schema: number; revision: string; generator: string; output_datum: string;
 	areas: { sha256: string; lat: number; lon: number; radius: number }[]; assets: CityAsset[];
 	credit: { title: string; attribution: string; source_url: string; license: string; license_url: string; changes: string } };
-// What one view draws, nearest first (the operator, 2026-10-16: the sketch's 20 meshes / 500k
+// What one view draws, the biggest on screen first (the operator, 2026-10-16: the sketch's 20 meshes / 500k
 // triangles stopped Prague's buildings ~1 km out). A mesh is 108 bytes a triangle (three vertices
 // of position, normal, colour), so 1.5 M triangles are ~162 MB; RESIDENT keeps a few more loaded
 // than drawn, so turning back does not download them again.
-export const MAX_ASSETS = 60, MAX_TRIANGLES = 1_500_000, MAX_BYTES = 192 * 1024 * 1024, REACH_M = 3000;
+export const MAX_ASSETS = 60, MAX_TRIANGLES = 1_500_000, MAX_BYTES = 192 * 1024 * 1024;
+// A mesh is drawn while its bounding sphere is at least this big on screen and in view: a reach in pixels, not metres,
+// so a zoom brings far buildings in (the operator, 2026-11-03: zoomed on Prague from 30 km, none showed under the old
+// 3 km reach). At 55 degrees a median asset (356 m) stays in out to ~4 km, as the 3 km reach about had it.
+export const MIN_ASSET_PX = 64;
 const RESIDENT = 72;
 // a release is up to 4096 meshes (earth's MAX_RELEASE_ASSETS), ~250 bytes of manifest each
 const MAX_RELEASE_ASSETS = 4096, MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
@@ -73,14 +77,20 @@ export function validateManifest(value: unknown, manifestUrl: string): CityManif
 }
 
 export function selectCityAssets(assets: CityAsset[], frame: Frame, camera: Vec3, view: View) {
+	const k = pxPerRad(view), dirLen = Math.hypot(...view.dir) || 1;
+	// the view's cone: half its diagonal
+	const halfDiag = Math.atan(Math.tan((view.fovY * Math.PI) / 360) * Math.hypot(1, view.aspect));
 	const candidates = assets.map(asset => {
 		const p = frame.fromGeodetic(...asset.anchor);
 		const d = p.map((n, i) => n - camera[i]);
 		const distance = Math.hypot(...d);
-		const ahead = d.reduce((sum, n, i) => sum + n * view.dir[i], 0);
-		return { asset, distance, ahead };
-	}).filter(c => c.distance <= REACH_M + c.asset.radius && c.ahead >= -c.asset.radius)
-		.sort((a, b) => a.distance - b.distance || a.asset.id.localeCompare(b.asset.id));
+		const px = (asset.radius / Math.max(distance, 1)) * k;
+		// inside its sphere, or the sphere reaching into the cone
+		const off = Math.acos(Math.max(-1, Math.min(1, d.reduce((s, n, i) => s + n * view.dir[i], 0) / (dirLen * Math.max(distance, 1e-9)))));
+		const inView = distance <= asset.radius || off - Math.asin(Math.min(1, asset.radius / distance)) <= halfDiag;
+		return { asset, px, inView };
+	}).filter(c => c.inView && c.px >= MIN_ASSET_PX)
+		.sort((a, b) => b.px - a.px || a.asset.id.localeCompare(b.asset.id));
 	const desired: CityAsset[] = []; let triangles = 0, bytes = 0;
 	for (const { asset } of candidates) {
 		if (desired.length >= MAX_ASSETS || triangles + asset.triangles > MAX_TRIANGLES || bytes + asset.bytes > MAX_BYTES) continue;
@@ -142,6 +152,14 @@ export class CityModelTiles {
 			errors: jobs.filter(j => j.error).map(j => `${j.label}: ${j.error}`) };
 	}
 	get credit() { return this.manifest?.credit; }
+	/** the scene was laid out about another origin: the loaded meshes carried there in one rigid move (terrainTiles') */
+	setFrame(next: Frame) {
+		if (next === this.o.frame) return;
+		const m = new THREE.Matrix4().set(...(rigid(this.o.frame, next) as Parameters<THREE.Matrix4['set']>));
+		for (const r of this.resident.values()) r.group.applyMatrix4(m);
+		this.o.frame = next;
+		this.compose();
+	}
 	get settled() { return this.stats.loading === 0; }
 	update(camera: Vec3, view: View) {
 		if (this.disposed) return;
