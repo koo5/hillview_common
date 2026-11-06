@@ -67,6 +67,8 @@
 		atlasUrl?: string;
 		/** the atlas channels a viewer may choose between, the default first */
 		atlasChannels?: string[];
+		/** the atlas point budget a viewer starts with, MiB (one of WORLD_POINT_BUDGETS); the viewer's own choice in
+		 * the controls is kept with the layers and wins from then on */
 		atlasBudgetMiB?: number;
 		/** where this viewer's layer choices are kept */
 		layersKey?: string;
@@ -96,7 +98,7 @@
 			/* preferences unavailable: the choice lasts this visit */
 		}
 	}
-	let layers = $state<SceneLayers>(untrack(() => readLayers(saved(layersKey), atlasChannels)));
+	let layers = $state<SceneLayers>(untrack(() => readLayers(saved(layersKey), atlasChannels, atlasBudgetMiB)));
 	$effect(() => keep(layersKey, JSON.stringify(layers)));
 
 	let host: HTMLDivElement;
@@ -659,12 +661,14 @@
 	// switch of version; a re-layout of the frame only moves it (ensureFrame)
 	const sceneUp = $derived(frame !== null);
 	let atlasGeneration = 0;
+	// a new budget opens the atlas again too: the residency's budget is fixed when it is made (WorldResidency)
 	$effect(() => {
 		const ch = layers.atlas;
-		if (sceneUp && atlasUrl) untrack(() => void switchAtlas(atlasUrl, ch));
+		const mib = layers.atlasMiB;
+		if (sceneUp && atlasUrl) untrack(() => void switchAtlas(atlasUrl, ch, mib));
 	});
 
-	async function switchAtlas(url: string, ch: string | null) {
+	async function switchAtlas(url: string, ch: string | null, mib: number) {
 		const generation = ++atlasGeneration;
 		if (atlas) {
 			scene?.remove(atlas.object);
@@ -683,7 +687,7 @@
 			const a = await loadAtlas(url, ch, { signal: abort.signal });
 			if (destroyed || generation !== atlasGeneration || !frame || !three || !scene) return;
 			const cloud = new AtlasCloud(three, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin), scene: frame, requests,
-				budgetMiB: atlasBudgetMiB, onChange: () => draw() });
+				budgetMiB: mib, onChange: () => draw() });
 			await cloud.open();
 			if (destroyed || generation !== atlasGeneration) { cloud.dispose(); return; }
 			// a re-layout during the open went by while atlas was null: place the cloud in today's frame

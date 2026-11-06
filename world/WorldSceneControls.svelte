@@ -6,6 +6,7 @@
 	 */
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, type FlyLayout } from './flight';
+	import { WORLD_POINT_BUDGETS } from './worldPointBudget';
 	import HeightStick from './HeightStick.svelte';
 
 	let { layers = $bindable(), flyLayout = $bindable(), onstick, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
@@ -97,6 +98,17 @@
 					{#each atlas as a (a.channel)}
 						<label><input type="radio" bind:group={layers.atlas} value={a.channel} data-testid="{testid}-atlas-{a.channel}" /> {a.label}</label>
 					{/each}
+					{#if layers.atlas !== null}
+						<!-- the points held at once; a change opens the atlas again (WorldScene) -->
+						<label title="memory for points (geometry only; the browser and GPU take more)">
+							budget
+							<select bind:value={layers.atlasMiB} data-testid="{testid}-atlas-budget">
+								{#each WORLD_POINT_BUDGETS as mib (mib)}
+									<option value={mib}>{mib} MiB</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
 				</fieldset>
 			{/if}
 		</div>
