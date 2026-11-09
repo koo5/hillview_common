@@ -3,14 +3,38 @@ import {DENSE_CLOUD, SPARSE_CLOUD} from './worldClouds';
 
 const MiB=1024*1024;
 const chunkBytes=(c:CopcChunk)=>c.positions.byteLength+c.colors.byteLength+
-	(c.views?.byteLength??0)+(c.cloudTypes?.byteLength??0);
+	(c.views?.byteLength??0)+(c.cloudTypes?.byteLength??0)+(c.linear?.byteLength??0);
+
+/**
+ * How a viewer that draws something other than the decoded rows keeps them (ea14, RECON-UI's review of A0). `rows`
+ * turns a block's kept rows into the form the viewer draws (placed positions, linear colours, ...). The residency
+ * then holds and charges THAT form instead of the decoded one, at `bytesPerRow` when it makes room. So the budget
+ * bounds what is really held and no third copy lives outside it. It may drop rows (a placement's own refusals);
+ * never add them.
+ */
+export type WorldPlacement = {
+	bytesPerRow: number;
+	rows: (chunk: CopcChunk, yieldWork: () => Promise<void>) => Promise<CopcChunk>;
+};
 
 /** One viewer's full-depth nodes, charged after filtering by native source kind.
- * Geometry currently uses float32 XYZ + linear float32 RGB (24 bytes/point).
- * The GPU bound is a residency policy, not a claim about free physical VRAM.
+ * Two bounds: maxGeometryBytes for the drawn geometry (float32 XYZ + linear float32 RGB, 24 bytes/point), and
+ * maxDecodedBytes for what the residency itself holds: the decoded rows (16 bytes/row, 18 with source ids), or a
+ * WorldPlacement's drawn form at its own bytesPerRow. The GPU bound is a residency policy, not a claim about free
+ * physical VRAM.
+ *
+ * A VIEW CHANGE KEEPS WHAT IS LOADED (ea14 C, 2026-11-09). reconcile used to drop every block outside the new view's
+ * plan at once, so turning the camera emptied the screen and turning back fetched it all again (the operator: "the
+ * viewer drops points when i turn around"). A block the new plan does not want is now RETAINED: still resident,
+ * still drawn (blocks/resident list it after the plan's), still charged to the budget. It leaves only when a wanted
+ * block needs its room: the finest retained first, then the least recently wanted, then (as before) lower-ranked
+ * wanted blocks. A sampled (blocked) block, a mode change and a hidden-source change still drop it.
  */
 export class WorldResidency {
 	private chunks=new Map<string,CopcChunk>();
+	private nodes=new Map<string,CopcNode>();
+	private wantedAt=new Map<string,number>();
+	private wanted=new Set<string>();
 	private eligible:CopcNode[]=[];
 	private blocked=new Set<string>();
 	private mode:'dense'|'all'='dense';
@@ -25,21 +49,27 @@ export class WorldResidency {
 			throw new Error('World residency requires explicit positive byte bounds');
 	}
 
+	private drop(key:string){
+		const chunk=this.chunks.get(key);if(!chunk)return;
+		this.points-=chunk.positions.length/3;this.decodedBytes-=chunkBytes(chunk);
+		this.chunks.delete(key);this.nodes.delete(key);this.wantedAt.delete(key);this.blocked.delete(key);
+	}
+
+	/** Retained keys in the order they give up their room: the deepest first, then the least recently wanted. */
+	private retainedOrder():string[]{
+		return [...this.chunks.keys()].filter(k=>!this.wanted.has(k)).sort((a,b)=>
+			(this.nodes.get(b)?.depth??0)-(this.nodes.get(a)?.depth??0)||(this.wantedAt.get(a)??0)-(this.wantedAt.get(b)??0));
+	}
+
 	reconcile(nodes:CopcNode[], mode:'dense'|'all', hiddenSources:number[]=[]){
 		this.generation++;
 		const hidden=[...new Set(hiddenSources)].sort((a,b)=>a-b),key=hidden.join(',');
 		if(mode!==this.mode||key!==this.hiddenKey){this.clear();this.mode=mode;this.hiddenKey=key;this.hidden=new Set(hidden);}
 		this.eligible=nodes;
-		const wanted=new Set(nodes.map(n=>n.key));
-		for(const [key,chunk] of this.chunks){
-			if(wanted.has(key))continue;
-			this.points-=chunk.positions.length/3;this.decodedBytes-=chunkBytes(chunk);this.chunks.delete(key);
-		}
+		this.wanted=new Set(nodes.map(n=>n.key));
+		for(const k of this.wanted)if(this.chunks.has(k))this.wantedAt.set(k,this.generation);
 		// A new view can promote a sampled node to full detail after other nodes leave.
-		for(const key of this.blocked){
-			const chunk=this.chunks.get(key);if(!chunk)continue;
-			this.points-=chunk.positions.length/3;this.decodedBytes-=chunkBytes(chunk);this.chunks.delete(key);
-		}
+		for(const k of [...this.blocked])this.drop(k);
 		this.blocked.clear();
 	}
 
@@ -61,7 +91,9 @@ export class WorldResidency {
 		return batch;
 	}
 
-	async accept(node:CopcNode, raw:CopcChunk, yieldWork:()=>Promise<void>=async()=>{}):Promise<boolean>{
+	async accept(node:CopcNode, raw:CopcChunk, yieldWork:()=>Promise<void>=async()=>{}, placement?:WorldPlacement):Promise<boolean>{
+		if(placement&&(!Number.isSafeInteger(placement.bytesPerRow)||placement.bytesPerRow<1))
+			throw new Error('A world placement must say how many bytes it holds per row');
 		if(this.chunks.has(node.key))return true;
 		if(!this.eligible.some(n=>n.key===node.key))return false;
 		const generation=this.generation,mode=this.mode,hidden=this.hidden;
@@ -81,17 +113,18 @@ export class WorldResidency {
 			if((mode==='all'||types[i]===DENSE_CLOUD)&&valid(i))count++;
 		}
 		if(generation!==this.generation)return false;
-		const bytesPerRow=16+(raw.views?2:0);
+		const bytesPerRow=placement?placement.bytesPerRow:16+(raw.views?2:0);
 		// A new view's near blocks must be able to displace lower-priority
 		// residency. Otherwise ranking requests cannot change a full far view.
 		const target=Math.min(count,Math.floor(this.maxGeometryBytes/24),Math.floor(this.maxDecodedBytes/bytesPerRow));
+		const roomy=()=>Math.floor(this.maxGeometryBytes/24)-this.points>=target&&
+			Math.floor((this.maxDecodedBytes-this.decodedBytes)/bytesPerRow)>=target;
+		// retained blocks (no longer in the plan) give up their room first, then lower-ranked wanted ones
+		for(const key of this.retainedOrder()){if(roomy())break;this.drop(key);}
 		const rank=this.eligible.findIndex(n=>n.key===node.key);
 		for(let i=this.eligible.length-1;i>rank;i--){
-			if(Math.floor(this.maxGeometryBytes/24)-this.points>=target&&
-				Math.floor((this.maxDecodedBytes-this.decodedBytes)/bytesPerRow)>=target)break;
-			const key=this.eligible[i].key,chunk=this.chunks.get(key);if(!chunk)continue;
-			this.points-=chunk.positions.length/3;this.decodedBytes-=chunkBytes(chunk);
-			this.chunks.delete(key);this.blocked.delete(key);
+			if(roomy())break;
+			this.drop(this.eligible[i].key);
 		}
 		const keepCount=Math.min(count,Math.floor(this.maxGeometryBytes/24)-this.points,
 			Math.floor((this.maxDecodedBytes-this.decodedBytes)/bytesPerRow));
@@ -114,7 +147,15 @@ export class WorldResidency {
 			}
 		}
 		if(generation!==this.generation)return false;
-		this.chunks.set(node.key,chunk);this.points+=keepCount;this.decodedBytes+=chunkBytes(chunk);
+		if(placement){
+			chunk=await placement.rows(chunk,yieldWork);
+			if(generation!==this.generation)return false;
+			const m=chunk.positions.length/3;
+			if(!Number.isInteger(m)||m>keepCount||chunk.colors.length!==m*3||(chunk.views&&chunk.views.length!==m)||
+				(chunk.linear&&chunk.linear.length!==m*3))throw new Error('A world placement may drop rows, never add them');
+		}
+		this.chunks.set(node.key,chunk);this.nodes.set(node.key,node);this.wantedAt.set(node.key,this.generation);
+		this.points+=chunk.positions.length/3;this.decodedBytes+=chunkBytes(chunk);
 		return true;
 	}
 
@@ -124,13 +165,23 @@ export class WorldResidency {
 		for(const node of this.eligible){const c=this.chunks.get(node.key);if(!c)break;points+=c.positions.length/3;}
 		return points;
 	}
-	get resident(){return this.eligible.filter(n=>this.chunks.has(n.key));}
+	/** Every resident node: the plan's, in its order, then the retained ones, the most recently wanted first. */
+	get resident(){
+		const planned=this.eligible.filter(n=>this.chunks.has(n.key));
+		const retained=[...this.chunks.keys()].filter(k=>!this.wanted.has(k))
+			.sort((a,b)=>(this.wantedAt.get(b)??0)-(this.wantedAt.get(a)??0)).map(k=>this.nodes.get(k)!);
+		return [...planned,...retained];
+	}
 	get blocks(){return this.resident.map(n=>this.chunks.get(n.key)!);}
 	get summary(){
 		const pending=this.eligible.filter(n=>!this.chunks.has(n.key)&&!this.blocked.has(n.key)).length;
+		const retained=[...this.chunks.keys()].filter(k=>!this.wanted.has(k)).length;
 		return {points:this.points,decodedBytes:this.decodedBytes,geometryBytes:this.points*24,
-			nodes:this.chunks.size,eligible:this.eligible.length,pending,limited:this.blocked.size,
+			nodes:this.chunks.size,eligible:this.eligible.length,pending,limited:this.blocked.size,retained,
 			complete:pending===0&&this.blocked.size===0};
 	}
-	clear(){this.generation++;this.chunks.clear();this.blocked.clear();this.eligible=[];this.points=0;this.decodedBytes=0;}
+	clear(){
+		this.generation++;this.chunks.clear();this.nodes.clear();this.wantedAt.clear();this.wanted.clear();
+		this.blocked.clear();this.eligible=[];this.points=0;this.decodedBytes=0;
+	}
 }

@@ -3,6 +3,8 @@ import {worldPointMiB,worldBudgetPoints} from './worldPointBudget';
 test('world geometry budget keeps the old default and offers explicit larger capacities',()=>{
  expect(worldPointMiB(null)).toBe(64);expect(worldBudgetPoints(64)).toBe(2796202);
  expect(worldPointMiB('128')).toBe(128);expect(worldBudgetPoints(128)).toBe(5592405);
+ // a residency holding 30 B per placed row admits that many fewer points; never more than the geometry's 24 B allows
+ expect(worldBudgetPoints(64,30)).toBe(2236962);expect(worldBudgetPoints(64,16)).toBe(2796202);
  for(const value of ['', 'NaN','Infinity','0','64.5','2048','-16','abc'])expect(()=>worldPointMiB(value)).toThrow('pointMiB');
 });
 

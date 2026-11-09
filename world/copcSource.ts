@@ -48,6 +48,7 @@ export type CopcChunk = {
 	colors: Uint8Array; // rgb triples, 0-255
 	views: Uint16Array | null; // per-point camera index, or null when the run has none
 	cloudTypes?: Uint8Array | null; // world UserData: 1 stored dense, 2 sparse
+	linear?: Float32Array; // rgb triples, linear 0-1: set by a WorldPlacement that draws them (then positions are placed)
 };
 
 export class CopcSource {
