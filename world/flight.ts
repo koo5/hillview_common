@@ -24,6 +24,25 @@ export const ROLL_RATE = 1.6;
 export const LOOK_RAD_PER_PX = 0.0022;
 const DRAG = -Math.log(0.02);
 
+/** how far a point is from a flown path, in metres by the local scale of a degree (the points are a flight's, metres
+ * apart: no need of a frame's exact geodesy); Infinity with no path. To the path's SEGMENTS, not only its points: a map
+ * echoes where its pan got to, and a pan a newer report cut short stops between two reports, on the line joining them
+ * (world-far-view.spec, 2026-11-08: at 1500 m/s the reports were 450 m apart, and an echo 0.02 m off the line but
+ * 8.7 m from its nearest report landed the flight) */
+export function pathOffsetM(path: readonly { lat: number; lon: number }[], lat: number, lon: number): number {
+	const mLat = 111_320, mLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+	let best = Infinity;
+	for (let i = 0; i < path.length; i++) {
+		const a = path[i], b = path[i + 1] ?? a;
+		const ax = (a.lon - lon) * mLon, ay = (a.lat - lat) * mLat;
+		const dx = (b.lon - a.lon) * mLon, dy = (b.lat - a.lat) * mLat;
+		const len2 = dx * dx + dy * dy;
+		const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+		best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+	}
+	return best;
+}
+
 export function boundedFlySpeed(value: number): number {
 	return Math.max(MIN_FLY_MPS, Math.min(MAX_FLY_MPS, value));
 }

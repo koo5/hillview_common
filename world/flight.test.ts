@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Vector3 } from 'three';
-import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, savedFlyLayout, zoomedFov,
-	ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
+import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, pathOffsetM, savedFlyLayout,
+	zoomedFov, ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
 
 test('metric preference has one default and bounded physical range', () => {
 	expect(DEFAULT_FLY_MPS).toBe(5);
@@ -107,4 +107,28 @@ test('a flight moves the camera along its own axes and comes to rest when the ke
 	expect(camera.position.distanceTo(before)).toBeGreaterThan(0);
 	f.halt({ y: true });
 	expect(f.step(camera, 1 / 30)).toBe(false);
+});
+
+test('an echo between two reports is on the path: the far-view e2e landing, 2026-11-08', () => {
+	// two of the flight's reports 1.5 km apart, and the map's echo that landed it: 8.7 m short of the later report
+	const path = [{ lat: 49.98622101136398, lon: 14.692625999450685 }, { lat: 49.979393126375406, lon: 14.710755633316046 }];
+	const echo = { lat: 49.97943256661632, lon: 14.710650444030763 };
+	expect(pathOffsetM(path, echo.lat, echo.lon)).toBeLessThan(0.1);
+	// what the points alone said: well past a map pixel at zoom 15 (3.1 m)
+	expect(pathOffsetM([path[1]], echo.lat, echo.lon)).toBeCloseTo(8.7, 1);
+});
+
+test('path offset: no path, one point, off the side, and past the ends', () => {
+	const mLat = 111_320, lat = 50, mLon = mLat * Math.cos((lat * Math.PI) / 180);
+	expect(pathOffsetM([], lat, 14)).toBe(Infinity);
+	expect(pathOffsetM([{ lat, lon: 14 }], lat + 30 / mLat, 14)).toBeCloseTo(30, 6);
+	// an east-west leg 1 km long
+	const path = [{ lat, lon: 14 }, { lat, lon: 14 + 1000 / mLon }];
+	expect(pathOffsetM(path, lat + 20 / mLat, 14 + 500 / mLon)).toBeCloseTo(20, 6);  // beside its middle
+	expect(pathOffsetM(path, lat, 14 - 40 / mLon)).toBeCloseTo(40, 6);              // before its start
+	expect(pathOffsetM(path, lat, 14 + 1050 / mLon)).toBeCloseTo(50, 6);            // past its end, not on the line's extension
+	// the nearest of several legs (a degree of longitude is measured at the asked point's latitude, 500 m north)
+	const bent = [...path, { lat: lat + 1000 / mLat, lon: 14 + 1000 / mLon }];
+	const q = lat + 500 / mLat, mLonQ = mLat * Math.cos((q * Math.PI) / 180);
+	expect(pathOffsetM(bent, q, 14 + 1000 / mLon + 3 / mLonQ)).toBeCloseTo(3, 6);
 });

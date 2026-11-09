@@ -27,7 +27,7 @@
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
 	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
-		savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
+		pathOffsetM, savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { SOURCE_NAMES, TerrainTiles, horizonM, zoomOf } from './terrainTiles';
 	import { DepthTarget, createWorldRenderer, type DepthMode } from './renderer';
@@ -330,13 +330,10 @@
 		if (stick && !stickFrame) { stickT = 0; stickFrame = requestAnimationFrame(rise); }
 		draw();
 	}
-	/** how far the app's location is from flight's path (its reports since take-off), in metres by the local scale of
-	 * a degree (the points are a flight's, metres apart: no need of the frame's exact geodesy); Infinity with none */
+	/** how far the app's location is from flight's path (its reports since take-off, and the lines between them: see
+	 * pathOffsetM), in metres; Infinity with none */
 	function offPathM(la: number, lo: number): number {
-		const mLat = 111_320, mLon = 111_320 * Math.cos((la * Math.PI) / 180);
-		let best = Infinity;
-		for (const r of sent) best = Math.min(best, Math.hypot((r.lat - la) * mLat, (r.lon - lo) * mLon));
-		return best;
+		return pathOffsetM(sent, la, lo);
 	}
 	/** within a map pixel of the path: flight's own report coming back, rounded, not a move of the app's */
 	const echoTolerance = () => Math.max(1, locationPrecisionM);
