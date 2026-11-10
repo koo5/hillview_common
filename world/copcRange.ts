@@ -37,11 +37,45 @@ export async function readCopcRange(read: ResourceRead,url: string,begin: number
 			await response.body?.cancel();
 			throw new RequestFailure('COPC response does not match the requested byte range',false);
 		}
-		const bytes=new Uint8Array(await response.arrayBuffer());
-		if(Number(match[2])-begin+1!==bytes.length)
-			throw new RequestFailure('COPC response length does not match its byte range',false);
-		return bytes;
+		return readBody(response,Number(match[2])-begin+1);
 	});
+}
+
+/**
+ * No byte for this long and a range read is given up, retryable, so the scheduler reads it again (ea14, 2026-11-10).
+ * That catches a HUNG read and never a slow one: the timer restarts on every chunk (RECON-UI's review). Before, a hung
+ * read waited out the scheduler's 180 s, and blocks are handed over in order, so it held its whole batch. A fixed
+ * deadline per block instead would abort a slow phone's reads that were still arriving.
+ */
+export const COPC_IDLE_MS=8000;
+
+/** The body, exactly `length` bytes, read chunk by chunk under the idle deadline. */
+async function readBody(response: Response,length: number): Promise<Uint8Array> {
+	if(!response.body){
+		const bytes=new Uint8Array(await response.arrayBuffer());
+		if(bytes.length!==length) throw new RequestFailure('COPC response length does not match its byte range',false);
+		return bytes;
+	}
+	const out=new Uint8Array(length),reader=response.body.getReader();
+	let got=0;
+	try{
+		for(;;){
+			let timer: ReturnType<typeof setTimeout>|undefined;
+			const idle=new Promise<never>((_,reject)=>{
+				timer=setTimeout(()=>reject(new RequestFailure(`COPC read stalled: no byte for ${COPC_IDLE_MS/1000} s`)),COPC_IDLE_MS);
+			});
+			let step: ReadableStreamReadResult<Uint8Array>;
+			try{step=await Promise.race([reader.read(),idle]);}finally{clearTimeout(timer);}
+			if(step.done)break;
+			if(got+step.value.length>length) throw new RequestFailure('COPC response length does not match its byte range',false);
+			out.set(step.value,got);got+=step.value.length;
+		}
+	}catch(error){
+		void reader.cancel().catch(()=>{});
+		throw error;
+	}
+	if(got!==length) throw new RequestFailure('COPC response length does not match its byte range',false);
+	return out;
 }
 
 /** Retry dropped links/timeouts and server failures, never corrupt data or another snapshot. */
