@@ -15,7 +15,9 @@ type Three = typeof THREE_NS;
 
 export const DEFAULT_FLY_MPS = 5;
 export const MIN_FLY_MPS = 0.001;
-export const MAX_FLY_MPS = 10_000;
+/** 1000 km/s: across the country in half a second, round the earth in 40 s. 10 km/s was too slow for a scene that holds
+ * the whole earth (the operator, 2026-11-10: "we should raise the 10km/s limit") */
+export const MAX_FLY_MPS = 1_000_000;
 export const FLY_SPEED_PREF = 'world.fly.speedMps';
 export const FLY_LAYOUT_PREF = 'world.fly.layout';
 /** roll on its keys, radians a second */

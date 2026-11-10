@@ -8,7 +8,9 @@ test('metric preference has one default and bounded physical range', () => {
 	for (const invalid of [null, '', 'bad', '-1', '0', 'Infinity']) expect(savedFlySpeed(invalid)).toBe(5);
 	expect(savedFlySpeed('3.5')).toBe(3.5);
 	expect(boundedFlySpeed(.0001)).toBe(.001);
-	expect(boundedFlySpeed(100000)).toBe(10000);
+	expect(boundedFlySpeed(100000)).toBe(100000);
+	expect(boundedFlySpeed(1e9)).toBe(1_000_000);
+	expect(savedFlySpeed('250000')).toBe(250000);
 });
 
 test('equal real elapsed time produces equal metres and velocity at 5–120 fps', () => {
