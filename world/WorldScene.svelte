@@ -19,8 +19,9 @@
 	 * FLIGHT (ea07, flight.ts): with the scene focused, a fly key frees the camera from the app's location and flies it
 	 * as the workbench's viewer does. While it flies, its ground point and heading are written back (`onmove`,
 	 * `onlook`), so the app's map follows; the app's location coming back as that same point is flight's own echo. A
-	 * move the scene did not make -- the map dragged, a photo chosen -- lands it: the observer stands at the eye height
-	 * over the new point, as before flight. Esc or the Land button lands it where it is.
+	 * move the scene did not make -- the map dragged -- lands it over the new point at the height it was flying over
+	 * the ground there, which becomes the eye height; a move to a point meant to be seen from the eye height (`landAtEye`:
+	 * a photo chosen) lands it there at the eye height it had before flight, as Esc or the Land button land it where it is.
 	 */
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import type * as THREE_NS from 'three';
@@ -57,6 +58,9 @@
 		fovY?: number;
 		/** a drag turned the view: the bearing and pitch now shown */
 		onlook?: (look: { bearing: number; pitch: number }) => void;
+		/** the app's location is a point to be seen from the eye height (a photo's position): a move there lands flight at
+		 * the eye height, not at the height it was flying over the ground */
+		landAtEye?: boolean;
 		oneye?: (eyeM: number) => void;
 		/** flight moved the observer: the ground point under it now (the app's location follows) */
 		onmove?: (at: { lat: number; lon: number }) => void;
@@ -75,7 +79,7 @@
 		testid?: string;
 	};
 	let {
-		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55,
+		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55, landAtEye = false,
 		onlook, oneye, onmove, locationPrecisionM = 1, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
 		testid = 'world-scene'
 	}: Props = $props();
@@ -316,11 +320,25 @@
 		onlook?.(look);
 	}
 	const pairDelta = (a: Vec3, b: Vec3): [number, number] => [a[0] - b[0], a[1] - b[1]];
-	/** back to the observer: standing at the eye height over the app's location */
+	/** the flown camera's height over the ground under it now; where none is loaded, the last flight reported */
+	function flownOverGround(): number | null {
+		if (frame && camera && terrain) {
+			const [la, lo, h] = frame.toGeodetic(...(camera.position.toArray() as Vec3));
+			const g = terrain.heightAt(la, lo);
+			if (g !== null) return h - g;
+		}
+		return flownEyeM > 0 ? flownEyeM : null;
+	}
+	/** back to the observer: standing at the eye height over the app's location. `keepHeight` (a move elsewhere, not
+	 * a landing asked for) makes the height flown over the ground the eye height first: panning the map from 300 m
+	 * dropped the observer to the eye height it had before take-off (the operator, 11-10) */
 	/** the last landing and why (the readout says it: a reset of the altitude explains itself) */
 	let landed = $state('');
-	function land(why: string) {
-		landed = `landed ${new Date().toLocaleTimeString()}: ${why}`;
+	function land(why: string, keepHeight = false) {
+		const over = keepHeight && flying ? flownOverGround() : null;
+		const kept = over === null ? null : Math.max(MIN_EYE_M, Math.min(MAX_EYE_M, over));
+		if (kept !== null && kept !== eyeM) oneye?.(kept);
+		landed = `landed ${new Date().toLocaleTimeString()}: ${why}${kept !== null ? `, kept ${kept.toFixed(1)} m over the ground` : ''}`;
 		flying = false;
 		flight?.stop();
 		if (flyFrame) cancelAnimationFrame(flyFrame);
@@ -478,7 +496,7 @@
 		untrack(() => {
 			const off = flying ? offPathM(lat, lon) : 0;
 			if (off > echoTolerance())
-				land(`the map moved ${Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported'} (an echo is within ${echoTolerance().toFixed(1)} m)`);
+				land(`${landAtEye ? 'the app moved to a point seen from the eye height' : 'the map moved'} ${Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported'} (an echo is within ${echoTolerance().toFixed(1)} m)`, !landAtEye);
 			ensureFrame();
 		});
 		draw();
