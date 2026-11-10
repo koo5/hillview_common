@@ -64,8 +64,9 @@ async function readBody(response: Response,length: number): Promise<Uint8Array> 
 			const idle=new Promise<never>((_,reject)=>{
 				timer=setTimeout(()=>reject(new RequestFailure(`COPC read stalled: no byte for ${COPC_IDLE_MS/1000} s`)),COPC_IDLE_MS);
 			});
-			let step: ReadableStreamReadResult<Uint8Array>;
-			try{step=await Promise.race([reader.read(),idle]);}finally{clearTimeout(timer);}
+			// the result's type is inferred: the lib's spelling of it differs between TypeScript setups (the workbench's
+			// svelte-check refused an explicit ReadableStreamReadResult)
+			const step=await Promise.race([reader.read(),idle]).finally(()=>clearTimeout(timer));
 			if(step.done)break;
 			if(got+step.value.length>length) throw new RequestFailure('COPC response length does not match its byte range',false);
 			out.set(step.value,got);got+=step.value.length;
