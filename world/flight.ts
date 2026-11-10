@@ -30,14 +30,18 @@ const DRAG = -Math.log(0.02);
  * apart: no need of a frame's exact geodesy); Infinity with no path. To the path's SEGMENTS, not only its points: a map
  * echoes where its pan got to, and a pan a newer report cut short stops between two reports, on the line joining them
  * (world-far-view.spec, 2026-11-08: at 1500 m/s the reports were 450 m apart, and an echo 0.02 m off the line but
- * 8.7 m from its nearest report landed the flight) */
+ * 8.7 m from its nearest report landed the flight). The line is the MAP's: Leaflet pans in Web Mercator, so a pan cut
+ * short stops on the straight line in Mercator, not in degrees. On a diagonal the two part by about tan(lat) gap^2 / 8R
+ * (RECON-UI, 2026-11-10: 756 m, two map pixels, for a 300 km report gap at 1000 km/s), so the projection is Mercator's:
+ * y in Mercator degrees, both axes at the metres per degree of longitude here. */
+const mercatorY = (lat: number) => (Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) * 180) / Math.PI;
 export function pathOffsetM(path: readonly { lat: number; lon: number }[], lat: number, lon: number): number {
-	const mLat = 111_320, mLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+	const mLon = 111_320 * Math.cos((lat * Math.PI) / 180), y = mercatorY(lat);
 	let best = Infinity;
 	for (let i = 0; i < path.length; i++) {
 		const a = path[i], b = path[i + 1] ?? a;
-		const ax = (a.lon - lon) * mLon, ay = (a.lat - lat) * mLat;
-		const dx = (b.lon - a.lon) * mLon, dy = (b.lat - a.lat) * mLat;
+		const ax = (a.lon - lon) * mLon, ay = (mercatorY(a.lat) - y) * mLon;
+		const dx = (b.lon - a.lon) * mLon, dy = (mercatorY(b.lat) - mercatorY(a.lat)) * mLon;
 		const len2 = dx * dx + dy * dy;
 		const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
 		best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
@@ -52,6 +56,11 @@ export function boundedFlySpeed(value: number): number {
 export function savedFlySpeed(value: string | null): number {
 	const n = value === null ? NaN : Number(value);
 	return Number.isFinite(n) && n > 0 ? boundedFlySpeed(n) : DEFAULT_FLY_MPS;
+}
+
+/** a fly speed as a reader takes it in, three figures: m/s below 1000 m/s, km/s from there ("1000000 m/s" said nothing) */
+export function flySpeedLabel(mps: number): string {
+	return mps >= 1000 ? `${Number((mps / 1000).toPrecision(3))} km/s` : `${Number(mps.toPrecision(3))} m/s`;
 }
 
 /** Exact integration of eased camera-local velocity. No scene/altitude inputs.
