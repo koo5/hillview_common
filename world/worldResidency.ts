@@ -176,8 +176,10 @@ export class WorldResidency {
 	get summary(){
 		const pending=this.eligible.filter(n=>!this.chunks.has(n.key)&&!this.blocked.has(n.key)).length;
 		const retained=[...this.chunks.keys()].filter(k=>!this.wanted.has(k)).length;
+		// nodes: the plan's resident blocks, so "nodes of eligible" says how far this view is; retained: those kept from
+		// earlier views (drawn and charged too; points and the bytes count them)
 		return {points:this.points,decodedBytes:this.decodedBytes,geometryBytes:this.points*24,
-			nodes:this.chunks.size,eligible:this.eligible.length,pending,limited:this.blocked.size,retained,
+			nodes:this.chunks.size-retained,eligible:this.eligible.length,pending,limited:this.blocked.size,retained,
 			complete:pending===0&&this.blocked.size===0};
 	}
 	clear(){

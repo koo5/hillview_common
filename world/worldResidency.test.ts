@@ -46,7 +46,8 @@ test('turning away and back keeps what was loaded: retained blocks are drawn and
 	expect(r.resident.map(n=>n.key)).toEqual(['a','b']);   // still drawn while c loads
 	expect(r.nextBatch()).toEqual([c]);await r.accept(c,chunk([1,1]));
 	expect(r.resident.map(n=>n.key)).toEqual(['c','a','b']);
-	expect(r.summary).toMatchObject({points:6,retained:2,complete:true});
+	// nodes are the plan's (c), retained the earlier views' (a, b): "1 of 1 blocks, 2 kept"
+	expect(r.summary).toMatchObject({points:6,nodes:1,eligible:1,retained:2,complete:true});
 	r.reconcile([a,b],'dense');
 	expect(r.nextBatch()).toEqual([]);   // nothing to fetch again: both are resident
 	expect(r.summary).toMatchObject({pending:0,retained:1,complete:true});
