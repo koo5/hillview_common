@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { Vector3 } from 'three';
-import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, integrateFlyMotion, Flight, FlyKeys, pathOffsetM, savedFlyLayout,
-	zoomedFov, ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
+import { PerspectiveCamera, Vector3 } from 'three';
+import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, earthUpThrust, integrateFlyMotion, Flight, FlyKeys, pathOffsetM,
+	savedFlyLayout, zoomedFov, ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
 
 test('metric preference has one default and bounded physical range', () => {
 	expect(DEFAULT_FLY_MPS).toBe(5);
@@ -131,4 +131,21 @@ test('path offset: no path, one point, off the side, and past the ends', () => {
 	const bent = [...path, { lat: lat + 1000 / mLat, lon: 14 + 1000 / mLon }];
 	const q = lat + 500 / mLat, mLonQ = mLat * Math.cos((q * Math.PI) / 180);
 	expect(pathOffsetM(bent, q, 14 + 1000 / mLon + 3 / mLonQ)).toBeCloseTo(3, 6);
+});
+
+test('the height stick thrusts along the earth\'s up, not the camera\'s, whichever way it looks or is rolled', () => {
+	const up = new Vector3(0.01, -0.02, 1).normalize(); // the local vertical 20 km from the frame's origin leans a little
+	const camera = new PerspectiveCamera();
+	for (const [look, roll] of [[[0, 1, 0], 0], [[0, 1, -1], 0], [[0, 0.001, -1], 0], [[1, 1, 0.5], 0.4], [[-1, 0.2, -0.3], -1.2]] as const) {
+		camera.up.set(0, 0, 1);
+		camera.position.set(0, 0, 0);
+		camera.lookAt(look[0], look[1], look[2]);
+		camera.rotateZ(roll);
+		const world = new Vector3(...earthUpThrust(up, camera.quaternion, 0.7)).applyQuaternion(camera.quaternion);
+		expect(world.distanceTo(up.clone().multiplyScalar(0.7))).toBeCloseTo(0, 9);
+	}
+	// what it replaces: looking straight down, the camera's own up lies flat, so the stick slid the ship sideways
+	camera.up.set(0, 0, 1);
+	camera.lookAt(0, 0.001, -1);
+	expect(Math.abs(new Vector3(0, 1, 0).applyQuaternion(camera.quaternion).z)).toBeLessThan(0.01);
 });

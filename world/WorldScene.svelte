@@ -27,7 +27,7 @@
 	import type * as THREE_NS from 'three';
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
-	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, keyBelongsToControl, lookScale,
+	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, keyBelongsToControl, lookScale,
 		pathOffsetM, savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { SOURCE_NAMES, TerrainTiles, horizonM, zoomOf } from './terrainTiles';
@@ -59,7 +59,8 @@
 		/** a drag turned the view: the bearing and pitch now shown */
 		onlook?: (look: { bearing: number; pitch: number }) => void;
 		/** the app's location is a point to be seen from the eye height (a photo's position): a move there lands flight at
-		 * the eye height, not at the height it was flying over the ground */
+		 * the eye height, not at the height it was flying over the ground, and is never taken for flight's own echo
+		 * however near its path (flight reports no such point) */
 		landAtEye?: boolean;
 		oneye?: (eyeM: number) => void;
 		/** flight moved the observer: the ground point under it now (the app's location follows) */
@@ -272,6 +273,10 @@
 
 	function takeOff() {
 		if (!flight || !camera) return;
+		// from where the observer stands: a take-off before the frame a landing asked for was drawn found the camera still
+		// where flight had left it, and flew on from there -- off over the old point, not up from the new one (a fly key
+		// straight after a photo pick; found by the app's world-landing spec, 2026-11-10)
+		if (!flying) stand();
 		// the path starts where the app stands: until the map echoes the first report, a bearing echo, a zoom or a pull
 		// of the stick finds the app's location still here (RECON-UI)
 		if (!flying) sent = [{ lat, lon }];
@@ -286,7 +291,11 @@
 		const dt = flyT ? Math.min(1, (t - flyT) / 1000) : 0;
 		flyT = t;
 		flight.speed = flySpeed;
-		const moving = flight.step(camera, dt, { thrust: [0, stick, 0] });
+		// the stick straight up from the earth under the camera, turned into its axes each frame (earthUpThrust)
+		const thrust = stick && frame
+			? earthUpThrust(new three!.Vector3(...localAxes(frame, camera.position.toArray() as Vec3).u), camera.quaternion, stick)
+			: [0, 0, 0] as [number, number, number];
+		const moving = flight.step(camera, dt, { thrust });
 		keepAboveGround();
 		report(!moving);
 		render();
@@ -413,22 +422,26 @@
 			: `flying: camera ${h.toFixed(1)} m, no ground under it loaded`;
 	}
 
+	/** the observer standing: the camera at the eye height over the app's location, along its bearing and pitch */
+	function stand() {
+		if (!camera || !frame) return;
+		const g = terrain?.groundAt(lat, lon);
+		if (g) { ground = g.h; groundFrom = `terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`}`; }
+		else if (ground !== null && !groundFrom.startsWith('last')) groundFrom = `last known (${groundFrom})`;
+		const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
+		standOn = ground ?? fromAtlas ?? 0;
+		if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
+		const at = frame.fromGeodetic(lat, lon, standOn + eyeM);
+		const d = direction(bearing, pitch);
+		camera.position.set(...at);
+		camera.up.set(0, 0, 1);
+		camera.lookAt(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
+	}
+
 	function render() {
 		raf = 0;
 		if (!renderer || !scene || !camera || !frame) return;
-		if (!flying) {
-			const g = terrain?.groundAt(lat, lon);
-			if (g) { ground = g.h; groundFrom = `terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`}`; }
-			else if (ground !== null && !groundFrom.startsWith('last')) groundFrom = `last known (${groundFrom})`;
-			const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
-			standOn = ground ?? fromAtlas ?? 0;
-			if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
-			const at = frame.fromGeodetic(lat, lon, standOn + eyeM);
-			const d = direction(bearing, pitch);
-			camera.position.set(...at);
-			camera.up.set(0, 0, 1);
-			camera.lookAt(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
-		}
+		if (!flying) stand();
 		const cam = camera.position.toArray() as Vec3;
 		if (layers.readout) readout = readoutOf(cam);
 		camera.fov = fov;
@@ -490,13 +503,21 @@
 		if (!raf && !destroyed) raf = requestAnimationFrame(render);
 	}
 
+	/** the location the effect below last saw: a new one named landAtEye is a pick, however near flight's path */
+	let lastAt = '';
 	// a move of the observer (the app's location state) or of the view; one flight did not make lands it
 	$effect(() => {
 		void lat; void lon; void bearing; void pitch; void eyeM; void fov;
 		untrack(() => {
+			const at = `${lat},${lon}`, moved = at !== lastAt;
+			lastAt = at;
 			const off = flying ? offPathM(lat, lon) : 0;
-			if (off > echoTolerance())
-				land(`${landAtEye ? 'the app moved to a point seen from the eye height' : 'the map moved'} ${Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported'} (an echo is within ${echoTolerance().toFixed(1)} m)`, !landAtEye);
+			const offText = Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported';
+			// a photo inside the range circle lies near the path: within a map pixel of it (1/70 of the circle, at any
+			// zoom) the echo test alone took the pick for flight's own report and did not land
+			if (flying && landAtEye && moved) land(`the app moved to a point seen from the eye height, ${offText}`);
+			else if (off > echoTolerance())
+				land(`the map moved ${offText} (an echo is within ${echoTolerance().toFixed(1)} m)`, true);
 			ensureFrame();
 		});
 		draw();
@@ -558,7 +579,7 @@
 	}
 	/** the height stick's pull, -1..1, squared with its sign (a small pull is fine control, a full one fast):
 	 * standing, the eye rises or sinks by STICK_RISE e-folds a second at full pull (2 m to 900 m in about 4 s);
-	 * flying, it is the thrust R/F give, along the camera's up */
+	 * flying, it thrusts straight up or down from the earth (earthUpThrust), where R/F thrust along the camera's own up */
 	let stick = 0;
 	let stickFrame = 0, stickT = 0;
 	const STICK_RISE = 1.5;

@@ -172,6 +172,15 @@ export function levelWings(THREE: Three, camera: THREE_NS.Camera) {
 	camera.lookAt(target);
 }
 
+/** a pull of -1..1 straight along the earth's up `up` (world coordinates: compass.localAxes(..).u at the camera), as
+ * the camera-local thrust Flight.step takes: a height control changes the height and only that, whichever way the
+ * camera looks or is rolled -- along the camera's own up, looking down it slid the ship over the ground (the
+ * operator, 2026-11-10: "perpendicular to earth, not your own axis"). The keys keep the ship's own axes. */
+export function earthUpThrust(up: THREE_NS.Vector3, quaternion: THREE_NS.Quaternion, pull: number): [number, number, number] {
+	const v = up.clone().applyQuaternion(quaternion.clone().invert()).multiplyScalar(pull);
+	return [v.x, v.y, v.z];
+}
+
 /** the mouse's angular scale at this field of view: the visible span moves with the hand at any zoom */
 export function lookScale(camera: THREE_NS.PerspectiveCamera): number {
 	return Math.tan((camera.fov * Math.PI) / 360) / Math.tan((55 * Math.PI) / 360);
