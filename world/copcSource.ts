@@ -156,8 +156,9 @@ export class CopcSource {
 		return this.nodes.length;
 	}
 
-	/** The deepest level any node of the hierarchy sits at; the root is 0 (the nodes are sorted by depth). */
-	get maxDepth(): number {
+	/** The deepest level any node of the hierarchy sits at; the root is 0 (the nodes are sorted by depth). Not select()'s
+	 * `maxDepth` option, which caps a selection. */
+	get deepestLevel(): number {
 		return this.nodes.length ? this.nodes[this.nodes.length - 1].depth : 0;
 	}
 

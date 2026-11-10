@@ -165,12 +165,15 @@ export class WorldResidency {
 		for(const node of this.eligible){const c=this.chunks.get(node.key);if(!c)break;points+=c.positions.length/3;}
 		return points;
 	}
+	/** The plan's resident nodes, in its order: what THIS view has loaded, without the blocks kept from earlier views.
+	 * A reader that speaks of this view (how deep its detail goes) reads these, not `resident` (RECON-UI's world line,
+	 * EARTH's review: after a close look and a turn away, a retained deep block is not this view's detail). */
+	get planned(){return this.eligible.filter(n=>this.chunks.has(n.key));}
 	/** Every resident node: the plan's, in its order, then the retained ones, the most recently wanted first. */
 	get resident(){
-		const planned=this.eligible.filter(n=>this.chunks.has(n.key));
 		const retained=[...this.chunks.keys()].filter(k=>!this.wanted.has(k))
 			.sort((a,b)=>(this.wantedAt.get(b)??0)-(this.wantedAt.get(a)??0)).map(k=>this.nodes.get(k)!);
-		return [...planned,...retained];
+		return [...this.planned,...retained];
 	}
 	get blocks(){return this.resident.map(n=>this.chunks.get(n.key)!);}
 	get summary(){

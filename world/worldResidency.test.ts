@@ -54,6 +54,17 @@ test('turning away and back keeps what was loaded: retained blocks are drawn and
 	expect(r.resident.map(n=>n.key)).toEqual(['a','b','c']);
 });
 
+test('planned is this view\'s resident blocks: a deep block kept from a view turned away from is not among them',async()=>{
+	const r=new WorldResidency(24*10,16*10),deep={...node('deep',2),depth:9},coarse={...node('coarse',2),depth:5};
+	r.reconcile([deep],'dense');await r.accept(deep,chunk([1,1]));
+	r.reconcile([coarse],'dense');await r.accept(coarse,chunk([1,1]));
+	expect(r.resident.map(n=>n.key)).toEqual(['coarse','deep']);   // deep is still drawn (retained)
+	expect(r.planned.map(n=>n.key)).toEqual(['coarse']);
+	expect(Math.max(...r.planned.map(n=>n.depth))).toBe(5);         // this view's detail ends at level 5, not 9
+	r.reconcile([deep,coarse],'dense');
+	expect(r.planned.map(n=>n.key)).toEqual(['deep','coarse']);     // wanted again, in the plan's order
+});
+
 test('a wanted block takes its room from the finest retained block first (ea14 C)',async()=>{
 	const r=new WorldResidency(24*4,16*4);
 	const coarse={...node('coarse',2),depth:1},fine={...node('fine',2),depth:5},next={...node('next',2),depth:3};
