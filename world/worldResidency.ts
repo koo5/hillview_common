@@ -97,8 +97,12 @@ export class WorldResidency {
 		if(this.chunks.has(node.key))return true;
 		if(!this.eligible.some(n=>n.key===node.key))return false;
 		const generation=this.generation,mode=this.mode,hidden=this.hidden;
-		const n=raw.positions.length/3,types=raw.cloudTypes;
-		if(!Number.isInteger(n)||!types||types.length!==n||raw.colors.length!==n*3||
+		const n=raw.positions.length/3,types=raw.cloudTypes??null;
+		// THE TAGS ARE READ ONLY TO KEEP THE DENSE ROWS: a merged world's tree carries them, a run's tree is one cloud and
+		// has none (RECON-UI's ui09). Mode 'all' keeps every row, so it takes a block without tags as it is; 'dense'
+		// cannot tell its rows apart without them and refuses (EARTH, 2026-11-11).
+		if(!types&&mode==='dense')throw new Error('Invalid tagged world point block: dense rows need their cloud tags');
+		if(!Number.isInteger(n)||(types&&types.length!==n)||raw.colors.length!==n*3||
 			(raw.views&&raw.views.length!==n))throw new Error('Invalid tagged world point block');
 		if(hidden.size&&!raw.views)throw new Error('World source indices missing for removed-run filtering');
 		const valid=(i:number)=>{
@@ -109,8 +113,8 @@ export class WorldResidency {
 		let count=0;
 		for(let i=0;i<n;i++){
 			if(i%16384===0)await yieldWork();
-			if(types[i]!==DENSE_CLOUD&&types[i]!==SPARSE_CLOUD)throw new Error('Unknown world cloud-source tag');
-			if((mode==='all'||types[i]===DENSE_CLOUD)&&valid(i))count++;
+			if(types&&types[i]!==DENSE_CLOUD&&types[i]!==SPARSE_CLOUD)throw new Error('Unknown world cloud-source tag');
+			if((mode==='all'||types![i]===DENSE_CLOUD)&&valid(i))count++;
 		}
 		if(generation!==this.generation)return false;
 		const bytesPerRow=placement?placement.bytesPerRow:16+(raw.views?2:0);
@@ -133,17 +137,18 @@ export class WorldResidency {
 		let chunk=raw;
 		if(keepCount!==n){
 			chunk={positions:new Float32Array(keepCount*3),colors:new Uint8Array(keepCount*3),
-				views:raw.views?new Uint16Array(keepCount):null,cloudTypes:new Uint8Array(keepCount)};
+				views:raw.views?new Uint16Array(keepCount):null,cloudTypes:types?new Uint8Array(keepCount):null};
 			let k=0,rank=0;
 			for(let i=0;i<n;i++){
 				if(i%16384===0)await yieldWork();
-				if((mode==='dense'&&types[i]!==DENSE_CLOUD)||!valid(i))continue;
+				if((mode==='dense'&&types![i]!==DENSE_CLOUD)||!valid(i))continue;
 				// Evenly sample only the rows actually being displayed, after source filtering.
 				if(rank++!==Math.floor(k*count/keepCount))continue;
 				chunk.positions.set(raw.positions.subarray(i*3,i*3+3),k*3);
 				chunk.colors.set(raw.colors.subarray(i*3,i*3+3),k*3);
 				if(chunk.views)chunk.views[k]=raw.views![i];
-				chunk.cloudTypes![k]=types[i];k++;
+				if(types)chunk.cloudTypes![k]=types[i];
+				k++;
 			}
 		}
 		if(generation!==this.generation)return false;

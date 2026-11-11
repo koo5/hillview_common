@@ -108,8 +108,21 @@ test('a placement is what the residency holds and charges; it may drop rows but 
 test('unknown or missing source tags fail before publishing a block',async()=>{
 	const r=new WorldResidency(),a=node('a');r.reconcile([a],'dense');
 	await expect(r.accept(a,chunk([1,0,2]))).rejects.toThrow('Unknown');
-	await expect(r.accept(a,{...chunk([1]),cloudTypes:undefined})).rejects.toThrow('Invalid');
+	await expect(r.accept(a,{...chunk([1]),cloudTypes:undefined})).rejects.toThrow('dense rows need their cloud tags');
+	await expect(r.accept(a,{...chunk([1,1]),cloudTypes:new Uint8Array([1])})).rejects.toThrow('Invalid');
 	expect(r.summary.nodes).toBe(0);
+});
+
+test('a tree of one cloud (a run\'s) is held untagged in mode all, whole or sampled', async()=>{
+	const untagged=(n:number)=>({...chunk(Array(n).fill(1)),cloudTypes:null});
+	const whole=new WorldResidency(),a=node('a',2);whole.reconcile([a],'all');
+	expect(await whole.accept(a,untagged(2))).toBe(true);
+	expect(whole.blocks[0].cloudTypes).toBeNull();
+	expect(whole.summary).toMatchObject({points:2,decodedBytes:30,complete:true});
+	// one block past the room (48 bytes of geometry: 2 rows of its 4) is sampled, and stays untagged
+	const small=new WorldResidency(48,64),b=node('b',4);small.reconcile([b],'all');
+	expect(await small.accept(b,untagged(4))).toBe(true);
+	expect([small.blocks[0].positions.length/3,small.blocks[0].cloudTypes,small.summary.limited]).toEqual([2,null,1]);
 });
 
 test('a view or source change during yielded filtering cannot publish stale chunks',async()=>{
