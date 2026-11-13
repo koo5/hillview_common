@@ -27,8 +27,9 @@
 	import type * as THREE_NS from 'three';
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
-	import { FLY_LAYOUT_PREF, FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, keyBelongsToControl, lookScale,
-		pathOffsetM, savedFlyLayout, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS, type FlyLayout } from './flight';
+	import { FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, keyBelongsToControl, lookScale,
+		pathOffsetM, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS } from './flight';
+	import type { WorldView } from './worldView';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { SOURCE_NAMES, TerrainTiles, horizonM, zoomOf } from './terrainTiles';
 	import { DepthTarget, createWorldRenderer, type DepthMode } from './renderer';
@@ -55,7 +56,13 @@
 		pitch?: number;
 		/** the eye above the ground, metres */
 		eyeM?: number;
+		/** Initial absolute altitude from a shared view, kept while terrain loads; a move or height gesture releases it. */
+		initialAltitude?: number;
 		fovY?: number;
+		/** The rendered camera, for the host's URL state. */
+		onview?: (view: WorldView) => void;
+		/** Host-provided sharing, offered in the layers menu. */
+		onshare?: (view: WorldView) => Promise<string | void>;
 		/** a drag turned the view: the bearing and pitch now shown */
 		onlook?: (look: { bearing: number; pitch: number }) => void;
 		/** the app's location is a point to be seen from the eye height (a photo's position): a move there lands flight at
@@ -80,7 +87,8 @@
 		testid?: string;
 	};
 	let {
-		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, fovY = 55, landAtEye = false,
+		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, initialAltitude, fovY = 55, landAtEye = false,
+		onview, onshare,
 		onlook, oneye, onmove, locationPrecisionM = 1, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
 		testid = 'world-scene'
 	}: Props = $props();
@@ -88,6 +96,7 @@
 	/** a frame is good for this far from its origin; past it the scene is laid out again */
 	const REFRAME_M = 20_000;
 	const MIN_EYE_M = 1.5, MAX_EYE_M = 20_000;
+	let sharedAltitude = untrack(() => initialAltitude ?? null);
 
 	function saved(key: string): string | null {
 		try {
@@ -246,12 +255,7 @@
 	});
 
 	// ---- flight ----
-	const flyKeys = new FlyKeys(savedFlyLayout(saved(FLY_LAYOUT_PREF)));
-	let flyLayout = $state<FlyLayout>(flyKeys.layout);
-	$effect(() => {
-		flyKeys.layout = flyLayout;
-		keep(FLY_LAYOUT_PREF, flyLayout);
-	});
+	const flyKeys = new FlyKeys();
 	let flySpeed = $state(savedFlySpeed(saved(FLY_SPEED_PREF)));
 	let flight: Flight | null = null;
 	let flying = $state(false);
@@ -277,6 +281,7 @@
 		// where flight had left it, and flew on from there -- off over the old point, not up from the new one (a fly key
 		// straight after a photo pick; found by the app's world-landing spec, 2026-11-10)
 		if (!flying) stand();
+		releaseSharedAltitude();
 		// the path starts where the app stands: until the map echoes the first report, a bearing echo, a zoom or a pull
 		// of the stick finds the app's location still here (RECON-UI)
 		if (!flying) sent = [{ lat, lon }];
@@ -412,11 +417,32 @@
 	let readout = $state('');
 	/** the city models' drawn, loading and capped counts (data-buildings, for checks) */
 	let buildingsAttr = $state('');
+	/** Leave a shared absolute altitude at its current clearance, so a height gesture or flight starts there. */
+	function releaseSharedAltitude() {
+		if (sharedAltitude === null) return;
+		const eye = Math.max(MIN_EYE_M, Math.min(MAX_EYE_M, sharedAltitude - standOn));
+		sharedAltitude = null;
+		oneye?.(eye);
+	}
+
+	function currentView(): WorldView | null {
+		if (!frame || !camera || !three) return null;
+		const p = camera.position.toArray() as Vec3;
+		const [la, lo, altitude] = frame.toGeodetic(...p);
+		const look = headingOf(camera.getWorldDirection(new three.Vector3()).toArray() as Vec3, localAxes(frame, p));
+		return { lat: la, lon: lo, altitude, ...look, fov };
+	}
+
+	async function shareView() {
+		const view = currentView();
+		if (!view) throw new Error('The 3D view is still loading');
+		return onshare?.(view);
+	}
 	/** the height readout (layers.readout): the camera, the ground under it and where it came from; heights are
 	 * ellipsoidal, as earth serves them (sea level here is ~44 m) */
 	function readoutOf(cam: Vec3): string {
 		const [la, lo, h] = frame!.toGeodetic(...cam);
-		if (!flying) return `camera ${h.toFixed(1)} m = ground ${standOn.toFixed(1)} m (${groundFrom}) + eye ${eyeM.toFixed(1)} m`;
+		if (!flying) return `camera ${h.toFixed(1)} m = ground ${standOn.toFixed(1)} m (${groundFrom}) + eye ${(h - standOn).toFixed(1)} m`;
 		const g = terrain?.groundAt(la, lo);
 		return g ? `flying: camera ${h.toFixed(1)} m, ${(h - g.h).toFixed(1)} m over ground ${g.h.toFixed(1)} m (terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`})`
 			: `flying: camera ${h.toFixed(1)} m, no ground under it loaded`;
@@ -431,7 +457,9 @@
 		const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
 		standOn = ground ?? fromAtlas ?? 0;
 		if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
-		const at = frame.fromGeodetic(lat, lon, standOn + eyeM);
+		const height = sharedAltitude === null ? standOn + eyeM
+			: Math.max(sharedAltitude, ground !== null || fromAtlas !== null ? standOn + MIN_EYE_M : -Infinity);
+		const at = frame.fromGeodetic(lat, lon, height);
 		const d = direction(bearing, pitch);
 		camera.position.set(...at);
 		camera.up.set(0, 0, 1);
@@ -442,11 +470,13 @@
 		raf = 0;
 		if (!renderer || !scene || !camera || !frame) return;
 		if (!flying) stand();
+		const view = currentView();
+		if (view) onview?.(view);
 		const cam = camera.position.toArray() as Vec3;
 		if (layers.readout) readout = readoutOf(cam);
 		camera.fov = fov;
 		camera.near = depthMode === 'reversed' ? 0.05 : 0.5;
-		camera.far = Math.max(5_000, horizonM(flying ? flownEyeM : eyeM) * 1.5 + 50_000);
+		camera.far = Math.max(5_000, horizonM(flying ? flownEyeM : Math.max(eyeM, (view?.altitude ?? standOn) - standOn)) * 1.5 + 50_000);
 		camera.updateProjectionMatrix();
 		const v = cameraView(camera, scratch!, host.clientHeight || 800);
 		const ask = gate.state(cam, v, performance.now());
@@ -505,11 +535,15 @@
 
 	/** the location the effect below last saw: a new one named landAtEye is a pick, however near flight's path */
 	let lastAt = '';
+	let lastEye = untrack(() => eyeM);
 	// a move of the observer (the app's location state) or of the view; one flight did not make lands it
 	$effect(() => {
 		void lat; void lon; void bearing; void pitch; void eyeM; void fov;
 		untrack(() => {
 			const at = `${lat},${lon}`, moved = at !== lastAt;
+			if (eyeM !== lastEye) sharedAltitude = null;
+			else if (lastAt && moved) releaseSharedAltitude();
+			lastEye = eyeM;
 			lastAt = at;
 			const off = flying ? offPathM(lat, lon) : 0;
 			const offText = Number.isFinite(off) ? `${off.toFixed(1)} m off the flight path` : 'before flight reported';
@@ -602,8 +636,11 @@
 	let speedTimer: ReturnType<typeof setTimeout> | 0 = 0;
 
 	function raise(factor: number) {
-		const next = Math.max(MIN_EYE_M, Math.min(MAX_EYE_M, eyeM * factor));
+		const current = sharedAltitude === null ? eyeM : sharedAltitude - standOn;
+		sharedAltitude = null;
+		const next = Math.max(MIN_EYE_M, Math.min(MAX_EYE_M, current * factor));
 		if (next !== eyeM) oneye?.(next);
+		draw();
 	}
 	function onwheel(e: WheelEvent) {
 		e.preventDefault();
@@ -812,7 +849,7 @@
 			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
 	{#if !loading && !error}
-		<WorldSceneControls bind:layers bind:flyLayout {onstick} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers {onstick} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if layers.readout && readout}

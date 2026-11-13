@@ -52,3 +52,13 @@ export function cameraMeasure(THREE: typeof THREE_NS, camera: THREE_NS.Perspecti
 	};
 	return { measure, nearGroups };
 }
+
+/** The camera actually shown, including flight. Altitude is WGS84 ellipsoidal metres, as earth serves it. */
+export interface WorldView {
+	lat: number;
+	lon: number;
+	altitude: number;
+	bearing: number;
+	pitch: number;
+	fov: number;
+}

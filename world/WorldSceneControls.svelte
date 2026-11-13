@@ -5,14 +5,13 @@
 	 * a pointer that goes down on it, and a control under that capture never gets its click.
 	 */
 	import type { SceneLayers } from './sceneLayers';
-	import { FLY_LAYOUTS, type FlyLayout } from './flight';
+	import { FLY_LAYOUTS } from './flight';
 	import { WORLD_POINT_BUDGETS } from './worldPointBudget';
 	import HeightStick from './HeightStick.svelte';
 
-	let { layers = $bindable(), flyLayout = $bindable(), onstick, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), onstick, onshare, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
-		/** which labels the flight keys go by (the keys themselves are physical) */
-		flyLayout: FlyLayout;
+		onshare?: () => Promise<string | void>;
 		/** the height stick's deflection, -1..1, 0 when let go (HeightStick) */
 		onstick: (d: number) => void;
 		/** how the scene zooms, said after the flight keys (flight.ts ZoomKeys.label) */
@@ -32,6 +31,19 @@
 
 	let open = $state(false);
 	let root = $state<HTMLDivElement>();
+	let sharing = $state(false);
+	let shareStatus = $state('');
+	async function share() {
+		sharing = true;
+		shareStatus = '';
+		try {
+			shareStatus = (await onshare?.()) || 'Link shared';
+		} catch {
+			shareStatus = 'Could not share link. Please try again.';
+		} finally {
+			sharing = false;
+		}
+	}
 
 	function onwindowpointerdown(e: PointerEvent) {
 		if (open && root && !root.contains(e.target as Node)) open = false;
@@ -57,6 +69,12 @@
 	{/if}
 	{#if open}
 		<div class="panel" role="group" aria-label="Layers" data-testid="{testid}-layers">
+			{#if onshare}
+				<fieldset>
+					<button type="button" class="share" onclick={share} disabled={sharing} data-testid="{testid}-share-link">{sharing ? 'Sharing…' : 'Share link'}</button>
+					{#if shareStatus}<p class="share-status" role="status" data-testid="{testid}-share-status">{shareStatus}</p>{/if}
+				</fieldset>
+			{/if}
 			{#if ground}
 				<fieldset>
 					<legend>Ground</legend>
@@ -80,12 +98,7 @@
 			{/if}
 			<fieldset class="fly">
 				<legend>Fly</legend>
-				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS[flyLayout].label} · {zoomKeys}</p>
-				<div class="layouts">
-					{#each Object.keys(FLY_LAYOUTS) as l (l)}
-						<label><input type="radio" bind:group={flyLayout} value={l} data-testid="{testid}-fly-{l}" /> {l}</label>
-					{/each}
-				</div>
+				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS.qwerty.label} · {zoomKeys}</p>
 			</fieldset>
 			<fieldset>
 				<legend>Readout</legend>
@@ -184,9 +197,17 @@
 		color: #4a5a6c;
 		font-size: 12px;
 	}
-	.layouts {
-		display: flex;
-		gap: 12px;
+	.share {
+		padding: 6px 10px;
+		border: 1px solid #bbc6d1;
+		border-radius: 4px;
+		background: white;
+		font: inherit;
+		cursor: pointer;
+	}
+	.share-status {
+		max-width: 18em;
+		margin: 4px 0;
 	}
 	label {
 		display: flex;
