@@ -5,7 +5,8 @@
 	 * own panel round it decides where the observer stands and what a turn of the view writes back.
 	 *
 	 * Position and bearing are props (the app's one location state); a drag turns the view and says
-	 * so through `onlook`; the height stick or a pinch raises the eye, the wheel sets the fly speed. Nothing is drawn but on a change: a
+	 * so through `onlook`; the height stick raises the eye, the wheel or pinch zooms, and two-finger drags travel along
+	 * the ground in the look direction. Nothing is drawn but on a change: a
 	 * moved view, a loaded tile, a resize.
 	 *
 	 * What is drawn is the viewer's choice (ea07, sceneLayers.ts): bare or surface ground, the orthophoto, IPR's
@@ -28,7 +29,8 @@
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
 	import { FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, flySpeedLabel, keyBelongsToControl, lookScale,
-		pathOffsetM, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS } from './flight';
+		pathOffsetM, savedFlySpeed, scaledFov, zoomedFov, ZOOM_PLUS_MINUS } from './flight';
+	import { groundDrag, touchMetresPerPixel, touchPair, TouchTravel, wheelFov, type Point, type TouchPair } from './sceneGestures';
 	import type { WorldView } from './worldView';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
 	import { SOURCE_NAMES, TerrainTiles, horizonM, zoomOf } from './terrainTiles';
@@ -275,7 +277,7 @@
 	const fov = $derived(zoom ?? fovY);
 	const REPORT_MS = 300, MOVED_M = 0.1;
 
-	function takeOff() {
+	function takeOff(animate = true) {
 		if (!flight || !camera) return;
 		// from where the observer stands: a take-off before the frame a landing asked for was drawn found the camera still
 		// where flight had left it, and flew on from there -- off over the old point, not up from the new one (a fly key
@@ -286,7 +288,7 @@
 		// of the stick finds the app's location still here (RECON-UI)
 		if (!flying) sent = [{ lat, lon }];
 		flying = true;
-		if (!flyFrame) flyFrame = requestAnimationFrame(fly);
+		if ((animate || stick) && !flyFrame) flyFrame = requestAnimationFrame(fly);
 	}
 	function fly(t: number) {
 		flyFrame = 0;
@@ -566,31 +568,62 @@
 		draw();
 	}
 
-	// ---- input: drag to look, wheel or pinch to raise the eye ----
-	const pointers = new Map<number, { x: number; y: number }>();
-	let pinch: number | null = null;
+	// ---- input: one finger looks, wheel/pinch zooms, two fingers travel ----
+	const pointers = new Map<number, Point>();
+	let pair: TouchPair | null = null;
+	const travel = new TouchTravel();
+	let gestureFrame = 0;
+
+	function flushGesture() {
+		if (gestureFrame) cancelAnimationFrame(gestureFrame);
+		gestureFrame = 0;
+		const next = touchPair([...pointers.values()]);
+		const previous = pair;
+		pair = next;
+		if (!previous || !next) return;
+		const delta = travel.move(next.x - previous.x, next.y - previous.y);
+		if (delta && camera && frame && three && flight) {
+			// Touch displacement is direct, with no momentum; only the keys or height stick need the fly loop.
+			takeOff(false);
+			const position = camera.position.toArray() as Vec3;
+			const [la, lo, altitude] = frame.toGeodetic(...position);
+			const groundHeight = terrain?.heightAt(la, lo) ?? standOn;
+			const heading = headingOf(camera.getWorldDirection(new three.Vector3()).toArray() as Vec3, localAxes(frame, position)).bearing;
+			camera.position.set(...groundDrag(frame, position, heading, delta.x, delta.y,
+				touchMetresPerPixel(altitude - groundHeight, fov, host.clientHeight)));
+			keepAboveGround();
+			report(false);
+			draw();
+		}
+		if (previous.distance > 0 && next.distance > 0 && previous.distance !== next.distance) {
+			zoom = scaledFov(fov, previous.distance / next.distance);
+		}
+	}
 
 	function degPerPx() {
 		return fov / Math.max(1, host.clientHeight);
 	}
 	function onpointerdown(e: PointerEvent) {
+		flushGesture();
+		if (flying && pointers.size === 2) report(true);
 		autoFolded = true;
 		// the keys fly only while the scene has focus, so the app's own shortcuts keep theirs
 		host.focus({ preventScroll: true });
 		host.setPointerCapture(e.pointerId);
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-		pinch = null;
+		pair = touchPair([...pointers.values()]);
+		travel.reset();
 	}
 	function onpointermove(e: PointerEvent) {
 		const last = pointers.get(e.pointerId);
 		if (!last) return;
 		if (pointers.size === 2) {
 			pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-			if (flying) return;
-			const [a, b] = [...pointers.values()];
-			const d = Math.hypot(a.x - b.x, a.y - b.y);
-			if (pinch !== null && d > 0) raise(pinch / d);
-			pinch = d;
+			if (!gestureFrame) gestureFrame = requestAnimationFrame(flushGesture);
+			return;
+		}
+		if (pointers.size !== 1) {
+			pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 			return;
 		}
 		const k = degPerPx();
@@ -608,8 +641,12 @@
 		onlook?.({ bearing: nb, pitch: np });
 	}
 	function onpointerup(e: PointerEvent) {
+		if (!pointers.has(e.pointerId)) return;
+		flushGesture();
+		if (flying && pointers.size === 2) report(true);
 		pointers.delete(e.pointerId);
-		pinch = null;
+		pair = touchPair([...pointers.values()]);
+		travel.reset();
 	}
 	/** the height stick's pull, -1..1, squared with its sign (a small pull is fine control, a full one fast):
 	 * standing, the eye rises or sinks by STICK_RISE e-folds a second at full pull (2 m to 900 m in about 4 s);
@@ -631,10 +668,6 @@
 		if (dt) raise(Math.exp(STICK_RISE * stick * dt));
 		stickFrame = requestAnimationFrame(rise);
 	}
-	/** a turn of the wheel while standing says the speed it set for a moment (flying, the flight's line says it) */
-	let speedShown = $state(false);
-	let speedTimer: ReturnType<typeof setTimeout> | 0 = 0;
-
 	function raise(factor: number) {
 		const current = sharedAltitude === null ? eyeM : sharedAltitude - standOn;
 		sharedAltitude = null;
@@ -644,14 +677,13 @@
 	}
 	function onwheel(e: WheelEvent) {
 		e.preventDefault();
-		// the wheel sets the fly speed, standing or flying, as in the workbench's; up and down are the stick's
 		if (!e.deltaY) return;
-		flySpeed = boundedFlySpeed(flySpeed * (e.deltaY < 0 ? 1.25 : 0.8));
+		zoom = wheelFov(fov, e.deltaY, e.deltaMode, host.clientHeight);
+	}
+	function setFlySpeed(value: number) {
+		if (!Number.isFinite(value) || value <= 0) return;
+		flySpeed = boundedFlySpeed(value);
 		keep(FLY_SPEED_PREF, String(flySpeed));
-		if (flying) return;
-		speedShown = true;
-		if (speedTimer) clearTimeout(speedTimer);
-		speedTimer = setTimeout(() => { speedTimer = 0; speedShown = false; }, 1500);
 	}
 	function onkeydown(e: KeyboardEvent) {
 		if (keyBelongsToControl(e, false) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -787,7 +819,7 @@
 		if (namesRepaint) cancelAnimationFrame(namesRepaint);
 		if (retry) clearTimeout(retry);
 		if (earthRetry) clearTimeout(earthRetry);
-		if (speedTimer) clearTimeout(speedTimer);
+		if (gestureFrame) cancelAnimationFrame(gestureFrame);
 		if (stickFrame) cancelAnimationFrame(stickFrame);
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
@@ -823,6 +855,7 @@
 	{onpointermove}
 	{onpointerup}
 	onpointercancel={onpointerup}
+	onlostpointercapture={onpointerup}
 	{onwheel}
 	{onkeydown}
 	{onkeyup}
@@ -837,7 +870,7 @@
 	data-frame={frame ? `${frame.lat.toFixed(4)},${frame.lon.toFixed(4)}` : ''}
 	data-fly-speed={flySpeed.toFixed(1)}
 	role="application"
-	aria-label="3D world: drag to look around, the stick or a pinch to rise, scroll for the fly speed; click it, then fly with the keys"
+	aria-label="3D world: drag to look around, scroll or pinch to zoom, drag two fingers up or down to move forward or backward and sideways to sidestep; the stick raises or lowers the camera"
 >
 	<canvas class="names" bind:this={namesCanvas} data-testid="{testid}-names"></canvas>
 	<!-- the loading overlay, as the workbench shows it; its own pointer and wheel, so its list scrolls and its controls
@@ -849,7 +882,7 @@
 			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
 	{#if !loading && !error}
-		<WorldSceneControls bind:layers {onstick} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers {onstick} {flySpeed} onflyspeed={setFlySpeed} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if layers.readout && readout}
@@ -858,11 +891,9 @@
 	{/if}
 	{#if flying}
 		<div class="flight" role="status" data-testid="{testid}-flight" onpointerdown={(e) => e.stopPropagation()}>
-			<span>flying · {flySpeedLabel(flySpeed)} · scroll for speed</span>
+			<span>flying · {flySpeedLabel(flySpeed)}</span>
 			<button type="button" onclick={() => land('the Land button')} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
 		</div>
-	{:else if speedShown}
-		<div class="flight" role="status" data-testid="{testid}-fly-speed">fly speed {flySpeedLabel(flySpeed)}</div>
 	{/if}
 	{#if credits.length}
 		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button

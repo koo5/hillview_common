@@ -5,12 +5,14 @@
 	 * a pointer that goes down on it, and a control under that capture never gets its click.
 	 */
 	import type { SceneLayers } from './sceneLayers';
-	import { FLY_LAYOUTS } from './flight';
+	import { FLY_LAYOUTS, MIN_FLY_MPS, MAX_FLY_MPS } from './flight';
 	import { WORLD_POINT_BUDGETS } from './worldPointBudget';
 	import HeightStick from './HeightStick.svelte';
 
-	let { layers = $bindable(), onstick, onshare, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), onstick, onshare, flySpeed, onflyspeed, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
 		layers: SceneLayers;
+		flySpeed: number;
+		onflyspeed: (speed: number) => void;
 		onshare?: () => Promise<string | void>;
 		/** the height stick's deflection, -1..1, 0 when let go (HeightStick) */
 		onstick: (d: number) => void;
@@ -96,9 +98,12 @@
 					{/if}
 				</fieldset>
 			{/if}
-			<fieldset class="fly">
+			<fieldset>
 				<legend>Fly</legend>
-				<p data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS.qwerty.label} · {zoomKeys}</p>
+				<label>Speed <input type="number" min={MIN_FLY_MPS} max={MAX_FLY_MPS} step="any" value={flySpeed}
+					onchange={e => onflyspeed(e.currentTarget.valueAsNumber)} data-testid="{testid}-fly-speed-input" /> m/s</label>
+				<p class="fly-keys" data-testid="{testid}-fly-keys">click the view, then {FLY_LAYOUTS.qwerty.label} · {zoomKeys}</p>
+				<p>Scroll or pinch to zoom. Drag two fingers up/down to move forward/backward, sideways to sidestep. Use the stick to rise or sink.</p>
 			</fieldset>
 			<fieldset>
 				<legend>Readout</legend>
@@ -187,11 +192,11 @@
 	}
 	/* no keys to fly with on a touch-only device */
 	@media (hover: none) and (pointer: coarse) {
-		.fly {
+		.fly-keys {
 			display: none;
 		}
 	}
-	.fly p {
+	p {
 		max-width: 16em;
 		margin: 2px 0;
 		color: #4a5a6c;
@@ -216,5 +221,8 @@
 		padding: 3px 0;
 		white-space: nowrap;
 		cursor: pointer;
+	}
+	input[type='number'] {
+		width: 7em;
 	}
 </style>

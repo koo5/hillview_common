@@ -112,6 +112,12 @@ export const ZOOM_ZX: ZoomKeys = { by: 'code', narrow: ['KeyZ'], widen: ['KeyX']
  * on Digit1 (RECON-UI, 11-02); the keypad's keys type + and - too */
 export const ZOOM_PLUS_MINUS: ZoomKeys = { by: 'key', narrow: ['+', '='], widen: ['-'], label: '+/− zoom' };
 
+/** Scale the visible span, so wheel, pinch and keys zoom by the same rule even at telephoto fields of view. */
+export function scaledFov(fovDeg: number, scale: number): number {
+	const fov = (2 * Math.atan(Math.tan((fovDeg * Math.PI) / 360) * scale) * 180) / Math.PI;
+	return Math.max(0.1, Math.min(120, fov));
+}
+
 /** A narrowing key narrows the view, a widening one widens it, in equal steps even at very narrow fields of view;
  * null for any other key */
 export function zoomedFov(fovDeg: number, e: { code: string; key: string }, keys: ZoomKeys): number | null {
@@ -119,8 +125,7 @@ export function zoomedFov(fovDeg: number, e: { code: string; key: string }, keys
 	const narrow = keys.narrow.includes(k);
 	if (!narrow && !keys.widen.includes(k)) return null;
 	const scale = narrow ? 1 / 1.1 : 1.1;
-	const fov = (2 * Math.atan(Math.tan((fovDeg * Math.PI) / 360) * scale) * 180) / Math.PI;
-	return Math.max(0.1, Math.min(120, fov));
+	return scaledFov(fovDeg, scale);
 }
 
 /**
