@@ -4,8 +4,9 @@ import type { WorldRequests } from './worldRequests';
 
 /**
  * Read `nodes` of a tree through the shared request scheduler (one job a block, nearest first, three
- * attempts on a retryable range failure), handing each decoded block to `each` in order. The caller
- * decides what a block becomes: residency for a streamed world, a slab cut for a section.
+ * attempts on a retryable range failure; a read that stops arriving is given up after COPC_IDLE_MS, copcRange),
+ * handing each decoded block to `each` in order. The caller decides what a block becomes: residency for a streamed
+ * world, a slab cut for a section.
  */
 export async function readBlocks(source: CopcSource, nodes: CopcNode[], opts: {
 	url: string; requests: WorldRequests | null; scope: string; signal: AbortSignal;

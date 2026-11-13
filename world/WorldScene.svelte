@@ -27,7 +27,7 @@
 	import type * as THREE_NS from 'three';
 	import { Frame, rigid, type Vec3 } from './geodesy';
 	import { headingOf, localAxes } from './compass';
-	import { FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, keyBelongsToControl, lookScale,
+	import { FLY_SPEED_PREF, Flight, FlyKeys, LOOK_RAD_PER_PX, boundedFlySpeed, earthUpThrust, flySpeedLabel, keyBelongsToControl, lookScale,
 		pathOffsetM, savedFlySpeed, zoomedFov, ZOOM_PLUS_MINUS } from './flight';
 	import type { WorldView } from './worldView';
 	import { credits as earthCredits, layerUrls, loadEarth, type Credit, type Earth } from './earth';
@@ -858,11 +858,11 @@
 	{/if}
 	{#if flying}
 		<div class="flight" role="status" data-testid="{testid}-flight" onpointerdown={(e) => e.stopPropagation()}>
-			<span>flying · {Number(flySpeed.toPrecision(3))} m/s · scroll for speed</span>
+			<span>flying · {flySpeedLabel(flySpeed)} · scroll for speed</span>
 			<button type="button" onclick={() => land('the Land button')} data-testid="{testid}-land" title="Back to the map's point (Esc)">Land</button>
 		</div>
 	{:else if speedShown}
-		<div class="flight" role="status" data-testid="{testid}-fly-speed">fly speed {Number(flySpeed.toPrecision(3))} m/s</div>
+		<div class="flight" role="status" data-testid="{testid}-fly-speed">fly speed {flySpeedLabel(flySpeed)}</div>
 	{/if}
 	{#if credits.length}
 		<!-- its own pointer events: the scene captures a pointer that goes down on it, and a link or button

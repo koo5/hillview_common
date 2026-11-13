@@ -1,6 +1,47 @@
-import { expect,test } from 'vitest';
-import { readCopcRange } from './copcRange';
+import { expect,test,vi } from 'vitest';
+import { COPC_IDLE_MS,readCopcRange,retryCopcRead } from './copcRange';
 import type { ResourceRead } from './worldRequests';
+
+/** a world block's response whose body sends `chunks` (bytes each) `everyMs` apart, then ends -- or stalls if `stall` */
+function slowBlock(chunks: number,bytes: number,everyMs: number,stall=false): ResourceRead {
+	return async(_url,_init,consume)=>{
+		let sent=0;
+		const body=new ReadableStream<Uint8Array>({async pull(c){
+			if(sent===chunks){if(stall)return new Promise<void>(()=>{});c.close();return;}
+			if(sent)await new Promise(r=>setTimeout(r,everyMs));
+			c.enqueue(new Uint8Array(bytes).fill(sent+1));sent++;
+		}});
+		const total=stall?chunks*bytes+1:chunks*bytes;
+		return consume(new Response(body,{status:200,headers:{'X-Copc-Range':`bytes 0-${total-1}/1000000`,
+			'X-World-Key':'0123456789abcdef','X-World-Resolution':'full'}}));
+	};
+}
+const BLOCK='/api/atlas/world.copc.laz?key=0123456789abcdef&resolution=full';
+
+test('a read that stops arriving is given up after the idle deadline, retryable (ea14)',async()=>{
+	vi.useFakeTimers();
+	try{
+		const read=readCopcRange(slowBlock(1,100,0,true),BLOCK,0,101);
+		const settled=read.then(()=>'read',(e)=>e);
+		await vi.advanceTimersByTimeAsync(COPC_IDLE_MS-10);
+		expect(await Promise.race([settled,Promise.resolve('pending')])).toBe('pending');
+		await vi.advanceTimersByTimeAsync(20);
+		const error=await settled;
+		expect(String(error)).toContain('stalled');
+		expect(retryCopcRead(error)).toBe(true);
+	}finally{vi.useRealTimers();}
+});
+
+test('a slow read that keeps arriving is never given up: a chunk every 5 s for 60 s (ea14)',async()=>{
+	vi.useFakeTimers();
+	try{
+		const read=readCopcRange(slowBlock(13,64,5000),BLOCK,0,13*64);
+		await vi.advanceTimersByTimeAsync(13*5000);
+		const bytes=await read;
+		expect(bytes.length).toBe(13*64);
+		expect([bytes[0],bytes[64],bytes[13*64-1]]).toEqual([1,2,13]);
+	}finally{vi.useRealTimers();}
+});
 
 test('empty ranges never reach HTTP; invalid spans refuse',async()=>{
 	const read: ResourceRead=async()=>{throw new Error('must not fetch');};

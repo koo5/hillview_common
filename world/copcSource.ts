@@ -48,7 +48,22 @@ export type CopcChunk = {
 	colors: Uint8Array; // rgb triples, 0-255
 	views: Uint16Array | null; // per-point camera index, or null when the run has none
 	cloudTypes?: Uint8Array | null; // world UserData: 1 stored dense, 2 sparse
+	linear?: Float32Array; // rgb triples, linear 0-1: set by a WorldPlacement that draws them (then positions are placed)
 };
+
+/**
+ * The nominal distance between neighbouring points at `depth` of a COPC octree, in metres. The COPC info's `spacing`
+ * is the root's, in the file's units, and each level halves it. `toMetres` is how many metres one file unit is: 1 for
+ * a tree written in metres (the world's), the ENU alignment's scale for a run's tree in solve units. A nominal figure:
+ * a sparse node holds its points further apart. Bad input throws: a spacing that reads as "0 cm" would be a wrong
+ * answer, not a missing one.
+ */
+export function levelSpacing(rootSpacing: number, toMetres: number, depth: number): number {
+	if (!(Number.isFinite(rootSpacing) && rootSpacing > 0)) throw new Error(`COPC spacing must be positive, got ${rootSpacing}`);
+	if (!(Number.isFinite(toMetres) && toMetres > 0)) throw new Error(`COPC unit scale must be positive, got ${toMetres}`);
+	if (!(Number.isSafeInteger(depth) && depth >= 0)) throw new Error(`COPC depth must be a level, got ${depth}`);
+	return (rootSpacing * toMetres) / 2 ** depth;
+}
 
 export class CopcSource {
 	private constructor(
@@ -139,6 +154,19 @@ export class CopcSource {
 	/** How many nodes the hierarchy holds in total — the denominator for what a selection took. */
 	get nodeCount(): number {
 		return this.nodes.length;
+	}
+
+	/** The deepest level any node of the hierarchy sits at; the root is 0 (the nodes are sorted by depth). Not select()'s
+	 * `maxDepth` option, which caps a selection. */
+	get deepestLevel(): number {
+		return this.nodes.length ? this.nodes[this.nodes.length - 1].depth : 0;
+	}
+
+	/** The nominal distance between neighbouring points at `depth`, in metres (levelSpacing over the COPC info's spacing,
+	 * in metres through the ENU alignment's scale when the tree has one). What a viewer can say about how fine the detail
+	 * it loaded is (recon/directions ui06: the operator asked for points and metres). */
+	spacingAt(depth: number): number {
+		return levelSpacing(this.copc.info.spacing, this.enu?.scale ?? 1, depth);
 	}
 
 	/**

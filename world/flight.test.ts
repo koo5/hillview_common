@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { PerspectiveCamera, Vector3 } from 'three';
-import { boundedFlySpeed, savedFlySpeed, DEFAULT_FLY_MPS, earthUpThrust, integrateFlyMotion, Flight, FlyKeys, pathOffsetM,
+import { boundedFlySpeed, savedFlySpeed, flySpeedLabel, DEFAULT_FLY_MPS, earthUpThrust, integrateFlyMotion, Flight, FlyKeys, pathOffsetM,
 	savedFlyLayout, zoomedFov, ZOOM_PLUS_MINUS, ZOOM_ZX } from './flight';
 
 test('metric preference has one default and bounded physical range', () => {
@@ -8,7 +8,10 @@ test('metric preference has one default and bounded physical range', () => {
 	for (const invalid of [null, '', 'bad', '-1', '0', 'Infinity']) expect(savedFlySpeed(invalid)).toBe(5);
 	expect(savedFlySpeed('3.5')).toBe(3.5);
 	expect(boundedFlySpeed(.0001)).toBe(.001);
-	expect(boundedFlySpeed(100000)).toBe(10000);
+	expect(boundedFlySpeed(100000)).toBe(100000);
+	expect(boundedFlySpeed(1e9)).toBe(1_000_000);
+	expect(savedFlySpeed('250000')).toBe(250000);
+	expect([5, 999, 1000, 1500, 1_000_000].map(flySpeedLabel)).toEqual(['5 m/s', '999 m/s', '1 km/s', '1.5 km/s', '1000 km/s']);
 });
 
 test('equal real elapsed time produces equal metres and velocity at 5–120 fps', () => {
@@ -121,16 +124,25 @@ test('an echo between two reports is on the path: the far-view e2e landing, 2026
 test('path offset: no path, one point, off the side, and past the ends', () => {
 	const mLat = 111_320, lat = 50, mLon = mLat * Math.cos((lat * Math.PI) / 180);
 	expect(pathOffsetM([], lat, 14)).toBe(Infinity);
-	expect(pathOffsetM([{ lat, lon: 14 }], lat + 30 / mLat, 14)).toBeCloseTo(30, 6);
+	// north-south distances to a millimetre: Mercator's scale changes over them (0.08 mm in 30 m); east-west exact
+	expect(pathOffsetM([{ lat, lon: 14 }], lat + 30 / mLat, 14)).toBeCloseTo(30, 3);
 	// an east-west leg 1 km long
 	const path = [{ lat, lon: 14 }, { lat, lon: 14 + 1000 / mLon }];
-	expect(pathOffsetM(path, lat + 20 / mLat, 14 + 500 / mLon)).toBeCloseTo(20, 6);  // beside its middle
+	expect(pathOffsetM(path, lat + 20 / mLat, 14 + 500 / mLon)).toBeCloseTo(20, 3);  // beside its middle
 	expect(pathOffsetM(path, lat, 14 - 40 / mLon)).toBeCloseTo(40, 6);              // before its start
 	expect(pathOffsetM(path, lat, 14 + 1050 / mLon)).toBeCloseTo(50, 6);            // past its end, not on the line's extension
 	// the nearest of several legs (a degree of longitude is measured at the asked point's latitude, 500 m north)
 	const bent = [...path, { lat: lat + 1000 / mLat, lon: 14 + 1000 / mLon }];
 	const q = lat + 500 / mLat, mLonQ = mLat * Math.cos((q * Math.PI) / 180);
-	expect(pathOffsetM(bent, q, 14 + 1000 / mLon + 3 / mLonQ)).toBeCloseTo(3, 6);
+	expect(pathOffsetM(bent, q, 14 + 1000 / mLon + 3 / mLonQ)).toBeCloseTo(3, 3);
+});
+
+test('the path is the map\'s line, straight in Web Mercator: a fast diagonal pan cut short is on it (RECON-UI, 11-10)', () => {
+	// one report gap at 1000 km/s (300 km), bearing 45 from Prague; Leaflet's pan stopped at its Mercator mid-point
+	const path = [{ lat: 50.08, lon: 14.42 }, { lat: 51.947854, lon: 17.515452 }];
+	expect(pathOffsetM(path, 51.023333, 15.967726)).toBeLessThan(1);   // 755.6 m off the straight line in degrees
+	const side = pathOffsetM(path, 51.016974, 15.977834);               // a real move 1 km to the side still reads 1 km
+	expect(side).toBeGreaterThan(990); expect(side).toBeLessThan(1010);
 });
 
 test('the height stick thrusts along the earth\'s up, not the camera\'s, whichever way it looks or is rolled', () => {
