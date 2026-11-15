@@ -311,11 +311,13 @@
 		else flyT = 0;
 	}
 	/** the flown camera stays MIN_EYE_M over the loaded ground: flying into a hill put it under the terrain, which read as
-	 * the world jumping (the operator, 11-02). It slides along the ground instead; where no terrain is loaded it flies free */
+	 * the world jumping (the operator, 11-02). It slides along the ground instead; where no terrain is loaded it flies free.
+	 * Over the ground as drawn too (floorAt): over the finest loaded alone, it flew under a coarser tile drawn while that
+	 * one loaded, and the ground vanished (ea15) */
 	function keepAboveGround() {
 		if (!frame || !camera || !terrain) return;
 		const [la, lo, h] = frame.toGeodetic(...(camera.position.toArray() as Vec3));
-		const g = terrain.heightAt(la, lo);
+		const g = terrain.floorAt(la, lo);
 		if (g !== null && h < g + MIN_EYE_M) camera.position.set(...frame.fromGeodetic(la, lo, g + MIN_EYE_M));
 	}
 	/** where flight has the observer, written back (at most every REPORT_MS, and once it comes to rest) */
@@ -461,8 +463,10 @@
 		const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
 		standOn = ground ?? fromAtlas ?? 0;
 		if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
-		const height = sharedAltitude === null ? standOn + eyeM
+		const over = sharedAltitude === null ? standOn + eyeM
 			: Math.max(sharedAltitude, ground !== null || fromAtlas !== null ? standOn + MIN_EYE_M : -Infinity);
+		// never under the ground as drawn: a coarser tile stands in, higher, while the one under the observer loads (ea15)
+		const height = Math.max(over, (terrain?.floorAt(lat, lon) ?? -Infinity) + MIN_EYE_M);
 		const at = frame.fromGeodetic(lat, lon, height);
 		const d = direction(bearing, pitch);
 		camera.position.set(...at);

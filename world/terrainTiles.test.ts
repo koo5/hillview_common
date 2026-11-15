@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Frame } from './geodesy';
 import { selectMapTiles } from './footprintTiles';
-import { TerrainTiles, budgetFor, buildTileMesh, decodeTile, drapeOrtho, photoDz, screenSizePx, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
+import { TerrainTiles, budgetFor, buildTileMesh, decodeTile, drapeOrtho, meshHeight, photoDz, sampleTile, screenSizePx, fillHoles, finestRes, selectTiles, tileGrid, tileLonLat, tileOf, type View } from './terrainTiles';
 import { maxDistance } from './worldLabels';
 import { WorldRequests } from './worldRequests';
 
@@ -349,5 +349,49 @@ describe('a loading tile is stood in for by what is loaded there (ea15)', () => 
 			requests.dispose();
 			globalThis.fetch = real;
 		}
+	});
+});
+
+describe('the floor a camera stays above (ea15)', () => {
+	const z = 12, x = 2210, y = 1388, n = 3;
+	const k = 2 ** z;
+	/** the lat/lon at grid position (fx, fy) of tile (z, x, y) on an n-grid */
+	const at = (fx: number, fy: number): [number, number] => {
+		const lon = ((x + fx / (n - 1)) / k) * 360 - 180;
+		const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + fy / (n - 1))) / k))) * 180) / Math.PI;
+		return [lat, lon];
+	};
+	// one cell (the north-west one) with corners a = d = 0 and b = c = 100: the mesh's diagonal runs b to c
+	const h = new Float32Array([0, 100, 0, 100, 0, 0, 0, 0, 0]);
+
+	it('the mesh height is the drawn triangles, not the bilinear patch', () => {
+		const [la, lo] = at(0.5, 0.5);
+		expect(sampleTile(h, n, z, x, y, la, lo)!).toBeCloseTo(50, 3);
+		expect(meshHeight(h, n, z, x, y, la, lo)!).toBeCloseTo(100, 3);
+		const [la2, lo2] = at(0.25, 0.25);                     // above the diagonal: a, b, c's plane
+		expect(meshHeight(h, n, z, x, y, la2, lo2)!).toBeCloseTo(50, 3);
+		const [la3, lo3] = at(0.75, 0.75);                     // below it: b, c, d's plane
+		expect(meshHeight(h, n, z, x, y, la3, lo3)!).toBeCloseTo(50, 3);
+		expect(meshHeight(h, n, z, x + 1, y, la, lo)).toBeNull();
+	});
+
+	it('floorAt: the higher of the finest ground loaded and the ground drawn, a cached finer tile not drawn included', () => {
+		const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', frame, requests: new WorldRequests(), globe: false });
+		const inner = tt as unknown as { tiles: Map<string, object> };
+		const [la, lo] = at(0.5, 0.5);
+		// the coarse tile drawn (a stand-in), and a finer one cached under the same point, lower, not drawn
+		const coarse = new THREE.Mesh();
+		tt.group.add(coarse);
+		inner.tiles.set(`${z}/${x}/${y}`, { key: `${z}/${x}/${y}`, z, x, y, state: 'ready', mesh: coarse, h, n, used: 0 });
+		const [fx, fy] = tileOf(la, lo, z + 2);
+		inner.tiles.set(`${z + 2}/${fx}/${fy}`, { key: `${z + 2}/${fx}/${fy}`, z: z + 2, x: fx, y: fy, state: 'ready',
+			mesh: new THREE.Mesh(), h: new Float32Array(9).fill(20), n, used: 0 });
+		expect(tt.heightAt(la, lo)).toBeCloseTo(20, 3);          // the finest loaded: what the camera was kept over
+		expect(tt.floorAt(la, lo)!).toBeCloseTo(100, 3);         // the drawn surface is 80 m above it
+		// once the finer tile is drawn and the coarse one is not, the floor is the finer ground
+		tt.group.remove(coarse);
+		const fine = (inner.tiles.get(`${z + 2}/${fx}/${fy}`) as { mesh: THREE.Mesh }).mesh;
+		tt.group.add(fine);
+		expect(tt.floorAt(la, lo)!).toBeCloseTo(20, 3);
 	});
 });

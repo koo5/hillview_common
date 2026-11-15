@@ -235,6 +235,26 @@ export function sampleTile(h: Float32Array, n: number, z: number, x: number, y: 
 }
 
 /**
+ * A tile's height at a point ON ITS MESH: the two triangles buildTileMesh draws in each cell, split from its north-east
+ * corner to its south-west one, not sampleTile's bilinear patch. On a coarse tile the two differ by tens of metres in a
+ * cell (corners 0, 100, 100, 0: the mesh 100 m at the centre, the patch 50 m), so a camera kept over the patch flew
+ * inside the drawn hill (ea15). null outside the tile or where a corner has no value.
+ */
+export function meshHeight(h: Float32Array, n: number, z: number, x: number, y: number,
+	lat: number, lon: number): number | null {
+	const k = 2 ** z;
+	const fx = (((lon + 180) / 360) * k - x) * (n - 1);
+	const fy = (((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * k - y) * (n - 1);
+	if (!(fx >= 0 && fy >= 0 && fx <= n - 1 && fy <= n - 1)) return null;
+	const c0 = Math.min(n - 2, Math.floor(fx)), r0 = Math.min(n - 2, Math.floor(fy));
+	const tx = fx - c0, ty = fy - r0;
+	const a = h[r0 * n + c0], b = h[r0 * n + c0 + 1], c = h[(r0 + 1) * n + c0], d = h[(r0 + 1) * n + c0 + 1];
+	if (![a, b, c, d].every(Number.isFinite)) return null;
+	// (a, c, b) above the diagonal from b to c, (b, c, d) below it
+	return tx + ty <= 1 ? a + (b - a) * tx + (c - a) * ty : d + (c - d) * (1 - tx) + (b - d) * (1 - ty);
+}
+
+/**
  * What the camera sees: its forward direction in the world frame, its vertical field of view in
  * degrees, and the canvas it is drawn on. Tile detail follows from it: what a cell COVERS ON SCREEN.
  */
@@ -1019,6 +1039,25 @@ export class TerrainTiles {
 	/** the ground's ellipsoidal height at a point, from the finest loaded tile with a value there */
 	heightAt(lat: number, lon: number): number | null {
 		return this.groundAt(lat, lon)?.h ?? null;
+	}
+
+	/**
+	 * The height a camera must stay above at a point: the finest ground loaded there (heightAt) or the ground as DRAWN
+	 * there, whichever is higher. They differ while a tile loads -- a coarser stand-in is drawn where a finer tile is
+	 * cached -- and between samples (meshHeight). Kept over heightAt alone, a camera flying low went under the drawn
+	 * ground and saw the globe through it (the double-sided ground from below over it): ea15's probe, one frame in
+	 * four flights; the operator's "the terrain keeps disappearing". null where nothing is loaded.
+	 */
+	floorAt(lat: number, lon: number): number | null {
+		let floor = this.heightAt(lat, lon);
+		for (let z = this.o.maxZ; z >= this.o.minZ; z--) {
+			const [x, y] = tileOf(lat, lon, z);
+			const t = this.tiles.get(`${z}/${x}/${y}` as TileKey);
+			if (!t?.h || !t.n || !t.mesh || t.mesh.parent !== this.group) continue;
+			const h = meshHeight(t.h, t.n, z, x, y, lat, lon);
+			if (h !== null && (floor === null || h > floor)) floor = h;
+		}
+		return floor;
 	}
 
 	/** the same, with where it came from: the tile's zoom and the source byte of the sample nearest the point */
