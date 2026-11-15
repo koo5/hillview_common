@@ -490,6 +490,8 @@
 		}
 		// drawn only on change: a view the gate held back is asked for once its interval is up
 		else if (ask === 'soon' && !retry) retry = setTimeout(() => { retry = 0; draw(); }, gate.interval);
+		// the atlas's waiting blocks join this frame, up to its upload cap (ea14 A-1); more ask for the next frame
+		atlas?.beforeRender();
 		if (labelPool) {
 			// drawn where its depth can be read, so the names can be judged against it
 			const size = renderer.getDrawingBufferSize(new three!.Vector2());

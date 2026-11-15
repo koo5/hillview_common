@@ -15,6 +15,7 @@ import type { CopcChunk } from './copcSource';
 import { CopcSource } from './copcSource';
 import type { Credit } from './earth';
 import { readBlocks } from './copcBlocks';
+import { BlockCloud, srgbPointsMaterial } from './blockCloud';
 import { Frame, rigid } from './geodesy';
 import type { WorldRequests } from './worldRequests';
 import { WorldResidency } from './worldResidency';
@@ -75,14 +76,11 @@ export function atlasCredits(earth: Credit[], v: AtlasVersion): Credit[] {
 			.map((c) => ({ text: c.text, url: c.url ?? v.licence.url, licence: v.licence.spdx }))];
 }
 
-/** sRGB bytes to linear floats, as three's vertex colours are read (one table, 256 entries) */
-const LINEAR = Float32Array.from({ length: 256 }, (_, i) => {
-	const c = i / 255;
-	return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-});
-
 export class AtlasCloud {
-	readonly object: THREE_NS.Points;
+	/** the held blocks, each its own Points (BlockCloud); the group's matrix carries the tree into the scene */
+	readonly object: THREE_NS.Group;
+	private readonly blocks: BlockCloud;
+	private readonly material: THREE_NS.PointsMaterial;
 	private source: CopcSource | null = null;
 	private residency: WorldResidency;
 	private readonly scope: string;
@@ -100,10 +98,12 @@ export class AtlasCloud {
 		const bytes = (o.budgetMiB ?? 64) * 1024 * 1024;
 		this.residency = new WorldResidency(bytes, bytes);
 		this.scope = o.requests.scope('atlas points');
-		this.object = new THREE.Points(new THREE.BufferGeometry(),
-			new THREE.PointsMaterial({ size: o.pointPx ?? 2, sizeAttenuation: false, vertexColors: true }));
+		// EACH BLOCK UPLOADED ONCE (ea14 A-1): the cloud was concatenated into one new geometry and uploaded whole after
+		// every batch, which froze the workbench's world viewer at large budgets; the app's atlas did the same
+		this.material = srgbPointsMaterial(THREE, { size: o.pointPx ?? 2, sizeAttenuation: false });
+		this.blocks = new BlockCloud(THREE, { material: this.material });
+		this.object = this.blocks.object;
 		this.object.matrixAutoUpdate = false;
-		this.object.frustumCulled = false;
 		this.treeCamera = new THREE.PerspectiveCamera();
 		this.setScene(o.scene);
 	}
@@ -165,7 +165,13 @@ export class AtlasCloud {
 	/** no batch to read and no view waiting: what the view can show of this tree, it shows. A full budget
 	 * leaves later nodes pending for good (WorldResidency blocks the next), so `pending` cannot say this. */
 	get idle() {
-		return !this.running && !this.wanted;
+		return !this.running && !this.wanted && !this.blocks.waitingBlocks;
+	}
+
+	/** Before each render: held blocks that wait join the drawn ones, up to a frame's upload (BlockCloud.step); while
+	 * more wait, another frame is asked for (onChange), so a scene drawn on demand finishes them. */
+	beforeRender() {
+		if (this.blocks.step()) this.o.onChange?.();
 	}
 
 	private async pump() {
@@ -186,6 +192,8 @@ export class AtlasCloud {
 				t.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
 				const { measure, nearGroups } = cameraMeasure(THREE, t, [0, 0, 0], heightPx, reversed);
 				this.residency.reconcile(planWorldView(source.select({}), measure), 'dense');
+				// a plan may let blocks go (a new mode clears the residency): they leave the drawn set at once
+				this.blocks.sync(this.residency.blocks);
 				while (!this.wanted && !this.disposed) {
 					const batch = worldBatch(this.residency.priorityPoints, true);
 					const nodes = this.residency.nextBatch(batch.maxNodes, batch.rawPoints,
@@ -195,7 +203,7 @@ export class AtlasCloud {
 						url: this.o.treeUrl, requests: this.o.requests, scope: this.scope, signal: this.abort.signal,
 						each: async (_index, node, chunk) => { await this.residency.accept(node, chunk); }
 					});
-					this.rebuild();
+					this.blocks.sync(this.residency.blocks);
 					// a failed block is read again by a later batch (residency keeps nothing in flight): recovered
 					this.error = null;
 					this.o.onChange?.();
@@ -211,30 +219,12 @@ export class AtlasCloud {
 		}
 	}
 
-	private rebuild() {
-		const THREE = this.THREE;
-		const blocks: CopcChunk[] = this.residency.blocks;
-		const n = blocks.reduce((a, b) => a + b.positions.length / 3, 0);
-		const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
-		let k = 0;
-		for (const b of blocks) {
-			pos.set(b.positions, k);
-			for (let i = 0; i < b.colors.length; i++) col[k + i] = LINEAR[b.colors[i]];
-			k += b.positions.length;
-		}
-		const g = new THREE.BufferGeometry();
-		g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-		g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-		this.object.geometry.dispose();
-		this.object.geometry = g;
-	}
-
 	dispose() {
 		this.disposed = true;
 		this.abort.abort();
 		this.o.requests.release(this.scope, 'atlas closed');
 		this.source?.dispose();
-		this.object.geometry.dispose();
-		(this.object.material as THREE_NS.Material).dispose();
+		this.blocks.dispose();
+		this.material.dispose();
 	}
 }

@@ -1,0 +1,92 @@
+import * as THREE from 'three';
+import { expect, test } from 'vitest';
+import { BlockCloud, blockBytes, srgbPointsMaterial, type BlockRows } from './blockCloud';
+
+const block = (n: number, at = 0): BlockRows => ({
+	positions: Float32Array.from({ length: n * 3 }, (_, i) => at + i),
+	colors: Uint8Array.from({ length: n * 3 }, (_, i) => i % 256)
+});
+const drawnRows = (c: BlockCloud) => c.object.children.map((p) => ((p as THREE.Points).geometry.getAttribute('position').array as Float32Array));
+
+test('a block is drawn on its own arrays, colour bytes normalized, nothing copied', () => {
+	const c = new BlockCloud(THREE), a = block(4);
+	c.sync([a]);
+	expect(c.step()).toBe(false);
+	const g = (c.object.children[0] as THREE.Points).geometry;
+	expect(g.getAttribute('position').array).toBe(a.positions);
+	const colour = g.getAttribute('color') as THREE.BufferAttribute;
+	expect([colour.array === a.colors, colour.normalized, colour.itemSize]).toEqual([true, true, 3]);
+	expect(g.boundingSphere).not.toBeNull();
+	expect((c.object.children[0] as THREE.Points).material).toBe(c.material);
+	expect(c.points).toBe(4);
+});
+
+test('waiting blocks join nearest first, at most the upload a frame, and at least one however large', () => {
+	const a = block(10), b = block(10, 100), big = block(50, 200), d = block(1, 900);
+	const c = new BlockCloud(THREE, { uploadBytes: blockBytes(a) + blockBytes(b) });
+	c.sync([a, b, big, d]);
+	expect([c.step(), c.waitingBlocks]).toEqual([true, 2]);
+	expect(drawnRows(c)).toEqual([a.positions, b.positions]);
+	// the big block alone is over the cap: it still joins, by itself
+	expect([c.step(), c.waitingBlocks]).toEqual([true, 1]);
+	expect([c.step(), c.waitingBlocks]).toEqual([false, 0]);
+	expect(c.points).toBe(71);
+});
+
+test('a block the residency lets go leaves at once and frees its buffers; one that never joined never draws', () => {
+	const a = block(3), b = block(3, 10), late = block(3, 20);
+	const c = new BlockCloud(THREE, { uploadBytes: 1 });
+	c.sync([a, b, late]);
+	c.step(); c.step();
+	let freed = 0;
+	(c.object.children[0] as THREE.Points).geometry.addEventListener('dispose', () => freed++);
+	c.sync([b]);
+	expect([freed, drawnRows(c), c.waitingBlocks]).toEqual([1, [b.positions], 0]);
+	expect(c.step()).toBe(false);
+	expect(drawnRows(c)).toEqual([b.positions]);
+	// held again later (a new view wants it back): a new join, nothing kept from before
+	c.sync([b, a]);
+	c.step();
+	expect(drawnRows(c)).toEqual([b.positions, a.positions]);
+});
+
+test('an empty block (a dense view of sparse-only rows) holds its place and draws nothing', () => {
+	const c = new BlockCloud(THREE), empty = block(0);
+	c.sync([empty, block(2)]);
+	expect(c.step()).toBe(false);
+	expect([c.object.children.length, c.waitingBlocks, c.points]).toEqual([1, 0, 2]);
+	c.sync([empty]);
+	expect(c.object.children.length).toBe(0);
+});
+
+test('a block whose colours do not match its positions is refused', () => {
+	const c = new BlockCloud(THREE);
+	c.sync([{ positions: new Float32Array(6), colors: new Uint8Array(3) }]);
+	expect(() => c.step()).toThrow('three colour bytes');
+	expect(() => new BlockCloud(THREE, { uploadBytes: 0 })).toThrow('positive');
+});
+
+test('dispose frees every block; a caller\'s material stays the caller\'s', () => {
+	const own = srgbPointsMaterial(THREE, { size: 3 });
+	let materialFreed = 0;
+	own.addEventListener('dispose', () => materialFreed++);
+	const c = new BlockCloud(THREE, { material: own });
+	c.sync([block(2), block(2, 10)]);
+	c.step();
+	let freed = 0;
+	for (const p of c.object.children) (p as THREE.Points).geometry.addEventListener('dispose', () => freed++);
+	c.dispose();
+	expect([freed, c.object.children.length, materialFreed]).toEqual([2, 0, 0]);
+});
+
+test('the shader decodes sRGB bytes with the IEC 61966-2-1 curve', () => {
+	const m = srgbPointsMaterial(THREE, { size: 2, sizeAttenuation: false });
+	expect([m.vertexColors, m.size, m.sizeAttenuation]).toEqual([true, 2, false]);
+	const shader = { vertexShader: THREE.ShaderLib.points.vertexShader, fragmentShader: '', uniforms: {} } as unknown as THREE.WebGLProgramParametersWithUniforms;
+	m.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+	expect(shader.vertexShader).toContain('#include <color_vertex>\n#ifdef USE_COLOR\n\tvColor.rgb = mix(vColor.rgb / 12.92');
+	expect(shader.vertexShader).toContain('step(vec3(0.04045), vColor.rgb)');
+	expect(m.customProgramCacheKey()).toBe('srgb-bytes-points');
+	const broken = { vertexShader: 'void main(){}', fragmentShader: '', uniforms: {} } as unknown as THREE.WebGLProgramParametersWithUniforms;
+	expect(() => m.onBeforeCompile(broken, {} as THREE.WebGLRenderer)).toThrow('color_vertex');
+});
