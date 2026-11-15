@@ -18,10 +18,12 @@ export type WorldPlacement = {
 };
 
 /** One viewer's full-depth nodes, charged after filtering by native source kind.
- * Two bounds: maxGeometryBytes for the drawn geometry (float32 XYZ + linear float32 RGB, 24 bytes/point), and
- * maxDecodedBytes for what the residency itself holds: the decoded rows (16 bytes/row, 18 with source ids), or a
- * WorldPlacement's drawn form at its own bytesPerRow. The GPU bound is a residency policy, not a claim about free
- * physical VRAM.
+ * Two bounds: maxGeometryBytes, a POINT cap counted at 24 bytes a point (what a concatenated float32 XYZ + linear
+ * float32 RGB geometry took), and maxDecodedBytes for what the residency itself holds: the decoded rows (16 bytes/row,
+ * 18 with source ids), or a WorldPlacement's drawn form at its own bytesPerRow. A viewer that draws the held blocks
+ * on their own arrays (blockCloud.ts) holds no such geometry: it states its own bytes a point and passes points * 24
+ * here, so both bounds hold the same points (the workbench's world, ui13: 18 B in the page + 17 on the GPU). The GPU
+ * bound is a residency policy, not a claim about free physical VRAM.
  *
  * A VIEW CHANGE KEEPS WHAT IS LOADED (ea14 C, 2026-11-09). reconcile used to drop every block outside the new view's
  * plan at once, so turning the camera emptied the screen and turning back fetched it all again (the operator: "the

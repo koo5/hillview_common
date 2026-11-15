@@ -53,6 +53,35 @@ test('drawnBlocks: the joined blocks in join order, without empty, waiting or dr
 	expect([...c.drawnBlocks()].map(([rows]) => rows)).toEqual([late, a]);
 });
 
+test('a block joins unculled until its first render (its upload is that frame\'s); culling off draws every block', () => {
+	const c = new BlockCloud(THREE), a = block(2), b = block(2, 10);
+	const pointsOf = (rows: BlockRows) => [...c.drawnBlocks()].find(([r]) => r === rows)![1];
+	// three calls onAfterRender after it drew the object; here, by hand
+	const render = (p: THREE.Points) => p.onAfterRender({} as THREE.WebGLRenderer, {} as THREE.Scene, {} as THREE.Camera,
+		p.geometry, p.material as THREE.Material, null as unknown as THREE.Group);
+	c.sync([a]);
+	c.step();
+	expect(pointsOf(a).frustumCulled).toBe(false);
+	render(pointsOf(a));
+	expect(pointsOf(a).frustumCulled).toBe(true);
+	// a relief that moves points off their spheres: every block drawn, a fresh one too, and it stays so once rendered
+	c.culling = false;
+	expect(pointsOf(a).frustumCulled).toBe(false);
+	c.sync([a, b]);
+	c.step();
+	render(pointsOf(b));
+	expect([c.culling, pointsOf(b).frustumCulled]).toEqual([false, false]);
+	// culling back on: the rendered blocks are culled, one not rendered yet waits for its render
+	const late = block(2, 20);
+	c.sync([a, b, late]);
+	c.step();
+	c.culling = true;
+	expect([pointsOf(a).frustumCulled, pointsOf(b).frustumCulled, pointsOf(late).frustumCulled]).toEqual([true, true, false]);
+	render(pointsOf(late));
+	render(pointsOf(late));                                   // a second pass in the same frame changes nothing
+	expect(pointsOf(late).frustumCulled).toBe(true);
+});
+
 test('a block is drawn on its own arrays, colour bytes normalized, nothing copied', () => {
 	const c = new BlockCloud(THREE), a = block(4);
 	c.sync([a]);

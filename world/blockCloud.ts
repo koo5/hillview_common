@@ -44,7 +44,11 @@ export function srgbPointsMaterial(THREE: Three, parameters: THREE_NS.PointsMate
  * - `sync(blocks)` with the residency's blocks after each change: a block no longer held leaves at once; a new one waits.
  * - `step()` before each render: waiting blocks join, nearest first, up to `uploadBytes` a frame. It says whether more
  *   wait, so a viewer that draws on demand asks for another frame.
- * - Each block has its bounding sphere, so three draws only the blocks in the frustum.
+ * - Each block has its bounding sphere, so three draws only the blocks in view. A block JOINS UNCULLED: drawn in the
+ *   render after it joins wherever it lies, so its buffers go up in that frame, inside its cap. Culled from its first
+ *   render on, a block out of view would upload whenever it came into view, outside any cap (RECON-UI's review of
+ *   A-1). `culling = false` draws every block: a shader that moves points off their spheres (the workbench's relief
+ *   exaggeration) would otherwise have blocks culled while their points are on screen (EARTH's review of A-2).
  * - One material for every block: point size and colour are set once for the cloud.
  * - `attributes(rows)`: more per-point attributes a viewer's shader reads (the workbench's solve tints read the placed
  *   rows' source ids, RECON-UI's ui13), made when a block joins, on the block's own arrays too, and counted in the
@@ -59,6 +63,9 @@ export class BlockCloud<R extends BlockRows = BlockRows> {
 	private readonly uploadBytes: number;
 	private readonly ownsMaterial: boolean;
 	private readonly attributes: ((rows: R) => Record<string, THREE_NS.BufferAttribute>) | null;
+	/** joined blocks not rendered yet: unculled until then */
+	private readonly fresh = new Set<THREE_NS.Points>();
+	private culls = true;
 
 	constructor(private readonly THREE: Three, o: {
 		material?: THREE_NS.PointsMaterial; uploadBytes?: number;
@@ -78,9 +85,20 @@ export class BlockCloud<R extends BlockRows = BlockRows> {
 		for (const [rows, points] of this.drawn) {
 			if (held.has(rows)) continue;
 			this.drawn.delete(rows);
-			if (points) { this.object.remove(points); points.geometry.dispose(); }
+			if (points) { this.object.remove(points); points.geometry.dispose(); this.fresh.delete(points); }
 		}
 		this.waiting = blocks.filter((rows) => !this.drawn.has(rows));
+	}
+
+	/** Whether blocks out of view are skipped (true, the default); a block that has not been rendered yet is drawn
+	 *  regardless, for its upload. */
+	get culling(): boolean {
+		return this.culls;
+	}
+
+	set culling(on: boolean) {
+		this.culls = on;
+		for (const points of this.drawn.values()) if (points && !this.fresh.has(points)) points.frustumCulled = on;
 	}
 
 	/** Before a render: waiting blocks join, up to the frame's upload. True while more wait. */
@@ -120,8 +138,19 @@ export class BlockCloud<R extends BlockRows = BlockRows> {
 		for (const [name, a] of Object.entries(extra)) g.setAttribute(name, a);
 		g.computeBoundingSphere();
 		const points = new THREE.Points(g, this.material);
+		// unculled for its first render, wherever it lies: its buffers go up in the frame it joined
+		points.frustumCulled = false;
+		this.fresh.add(points);
+		points.onAfterRender = () => this.rendered(points);
 		this.object.add(points);
 		this.drawn.set(rows, points);
+	}
+
+	/** a joined block's first render is done: from now on it is culled as the cloud says */
+	private rendered(points: THREE_NS.Points) {
+		if (!this.fresh.delete(points)) return;
+		points.frustumCulled = this.culls;
+		points.onAfterRender = () => {};
 	}
 
 	/** points drawn now (joined blocks only) */
@@ -144,6 +173,7 @@ export class BlockCloud<R extends BlockRows = BlockRows> {
 	dispose() {
 		for (const points of this.drawn.values()) if (points) { this.object.remove(points); points.geometry.dispose(); }
 		this.drawn.clear();
+		this.fresh.clear();
 		this.waiting = [];
 		// a material the caller passed is the caller's to dispose
 		if (this.ownsMaterial) this.material.dispose();
