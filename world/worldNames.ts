@@ -25,9 +25,26 @@ export type NamesFrame = {
 	zoom: number;
 };
 
+/** the verdicts kept at most: every name ever probed has one, and a long flight passes tens of thousands */
+export const VERDICTS_MAX = 50_000;
+
+/**
+ * Past `max`, only the verdicts of the names in `keep` stay (those projected now, and those the verdict coming in is
+ * about). A name without a verdict is not drawn (arrange), and the map was emptied at the cap until 2026-11-15: every
+ * name on screen blinked out until the next read-back (ea15).
+ */
+export function pruneVerdicts(vis: Map<string, Judged>, keep: readonly (readonly Projected[])[], max = VERDICTS_MAX) {
+	if (vis.size <= max) return;
+	const ids = new Set<string>();
+	for (const list of keep) for (const it of list) ids.add(it.n.id);
+	for (const id of vis.keys()) if (!ids.has(id)) vis.delete(id);
+}
+
 export class WorldNames {
 	private probe: DepthProbe | null = null;
 	private vis = new Map<string, Judged>();
+	/** the names the last draw projected: their verdicts outlive the map's cap */
+	private projected: Projected[] = [];
 	private textW = new Map<string, number>();
 	/**
 	 * When the frame behind the latest verdict was drawn. The verdict arrives a read-back later -- on a real GPU a
@@ -81,6 +98,7 @@ export class WorldNames {
 		// best first, so a crowded view spends the probe's budget on the names that would win
 		items.sort((a, b) => b.n.priority - a.n.priority || a.depth - b.depth);
 		if (items.length > DepthProbe.MAX) items = items.slice(0, DepthProbe.MAX);
+		this.projected = items;
 		if (!this.probe) this.probe = new DepthProbe(this.THREE);
 		const probe = this.probe;
 		if (f.depth && probe.ok && !probe.busy) {
@@ -93,7 +111,7 @@ export class WorldNames {
 					this.note = 'names are not hidden by the scene here (this browser cannot read the depth back)';
 					return;
 				}
-				if (this.vis.size > 50_000) this.vis.clear();
+				pruneVerdicts(this.vis, [this.projected, snap]);
 				snap.forEach((it, i) => this.vis.set(it.n.id,
 					{ seen: z[i * 3] > 0.5, own: z[i * 3 + 1], lift: liftOf(z[i * 3 + 2], it.v, p5) }));
 				this.judgedAt = issued;

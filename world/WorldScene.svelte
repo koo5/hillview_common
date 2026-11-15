@@ -215,6 +215,7 @@
 		atlas?.setScene(frame);
 		terrain?.setFrame(next);
 		buildings?.setFrame(next);
+		labelPool?.setFrame(next);
 	}
 
 	/** what loaded says where the ground is, and so what is in view: choose again */
@@ -372,13 +373,14 @@
 	/** within a map pixel of the path: flight's own report coming back, rounded, not a move of the app's */
 	const echoTolerance = () => Math.max(1, locationPrecisionM);
 
-	/** the names round the camera, for this frame, while they are shown */
+	/** the names round the camera, while they are shown; a re-layout of the frame only moves them (ensureFrame: it
+	 * made a new, empty pool until 2026-11-15, and every name blinked out for a round of requests; ea15) */
 	$effect(() => {
-		const f = frame, url = namesShown ? urls?.namesUrl : undefined;
+		const up = sceneUp, url = namesShown ? urls?.namesUrl : undefined;
 		untrack(() => {
 			labelPool?.dispose();
 			labelPool = null;
-			if (f && url) labelPool = new LabelPool({ url, frame: f, requests, onChange: changed });
+			if (up && url) labelPool = new LabelPool({ url, frame: frame!, requests, onChange: changed });
 			draw();
 		});
 	});

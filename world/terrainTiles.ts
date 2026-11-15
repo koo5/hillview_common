@@ -12,8 +12,9 @@
  * what keeps a tile 100 km off from jittering, and a tile under the camera from shimmering.
  *
  * Which tiles: a quadtree from MIN_Z, a tile split while the camera is nearer than SPLIT times its
- * size, down to MAX_Z, capped at MAX_TILES. A tile still loading is stood in for by its nearest
- * loaded ancestor, so the ground thins rather than opening holes; skirts hang from every edge so
+ * size, down to MAX_Z, capped at MAX_TILES. A tile still loading is stood in for by what is loaded
+ * there: its finer tiles when they cover it, else its nearest loaded ancestor (ea15), so the ground
+ * thins or stays sharp a moment longer rather than opening holes; skirts hang from every edge so
  * two zooms meeting do not show the sky through the seam.
  *
  * Shading is baked into vertex colours (a hillshade from the grid's own normals, sun from the
@@ -108,6 +109,9 @@ const SRC_GLOBAL = 6;
 const SRC_SEA = 7;
 /** what a tile is assumed to rest on before anything under it has loaded: the 10 m mosaics */
 const RES_UNKNOWN = 10;
+/** how many levels down a loading tile looks for finer loaded tiles to stand in for it: a view that turned 8x
+ * coarser in one step (a zoom key, a climb) still keeps its ground (ea15) */
+const STAND_IN_LEVELS = 3;
 
 /**
  * A served tile's heights and sources, in either wire format (X-Tile-Format): `f32` -- float32
@@ -937,11 +941,11 @@ export class TerrainTiles {
 					if (this.disposed) return;
 					t.requestState = state;
 					if (state === 'cancelled' || state === 'failed') {
+						// a tile with its ground in stays, as any loaded tile does, until evict(). An incomplete one
+						// (X-Tile-Complete: 0) is ready and drawn while its retry waits, and it leaves the wanted set
+						// when the selection splits it: its children then need it as their stand-in (ea15, Ground 2)
 						if (!this.wanted.includes(key)) {
-							t.mesh?.geometry.dispose();
-							(t.mesh?.material as THREE_NS.Material | undefined)?.dispose();
-							t.tex?.dispose();
-							this.tiles.delete(key);
+							if (t.state !== 'ready') this.tiles.delete(key);
 						}
 						else if (!t.h) t.state = 'failed';
 					} else if (state !== 'loaded' && !t.h) t.state = 'loading';
@@ -1023,20 +1027,62 @@ export class TerrainTiles {
 		return null;
 	}
 
-	/** what is on screen: every wanted tile that is ready, else its nearest ready ancestor */
+	/**
+	 * What is on screen: every wanted tile that is ready; a wanted tile still loading is stood in for by what is
+	 * loaded there (standIn). Until 2026-11-15 only by its nearest ready ANCESTOR, and only leaves are ever asked for,
+	 * so an ancestor was loaded only if it had been a leaf once: when the view wanted coarser tiles (rising, zooming
+	 * out, moving away) the finer ones drawn were dropped and the globe showed through ("the terrain keeps
+	 * disappearing when it should be loading", the operator, 11-10; ea15).
+	 */
 	private compose() {
+		// every key within STAND_IN_LEVELS above a ready tile: standIn looks down only where something is
+		const above = new Set<string>();
+		for (const t of this.tiles.values()) {
+			if (t.state !== 'ready') continue;
+			for (let s = 1, z = t.z - 1; s <= STAND_IN_LEVELS && z >= this.o.minZ; s++, z--) above.add(`${z}/${t.x >> s}/${t.y >> s}`);
+		}
 		const show = new Set<THREE_NS.Mesh>();
 		for (const k of this.wanted) {
-			let [z, x, y] = k.split('/').map(Number);
-			let t = this.tiles.get(k);
-			while ((!t || t.state !== 'ready') && z > this.o.minZ) {
-				z--; x >>= 1; y >>= 1;
-				t = this.tiles.get(`${z}/${x}/${y}` as TileKey);
+			const [z, x, y] = k.split('/').map(Number);
+			for (const t of this.standIn(z, x, y, above)) {
+				t.used = this.tick;
+				if (t.mesh) show.add(t.mesh);
 			}
-			if (t?.state === 'ready' && t.mesh) { show.add(t.mesh); t.used = this.tick; }
 		}
 		for (const c of [...this.group.children]) if (c !== this.globe && !show.has(c as THREE_NS.Mesh)) this.group.remove(c);
 		for (const m of show) if (m.parent !== this.group) this.group.add(m);
+	}
+
+	/**
+	 * The ready tiles that draw a wanted tile's ground now: itself; else its ready finer tiles, when they cover it whole
+	 * (they are on screen already: nothing pops); else its nearest ready ancestor; else what finer tiles there are.
+	 * A ready tile without a mesh (no heights there) draws nothing, and counts: that ground is known to be empty.
+	 */
+	private standIn(z: number, x: number, y: number, above: Set<string>): Tile[] {
+		const own = this.tiles.get(`${z}/${x}/${y}` as TileKey);
+		if (own?.state === 'ready') return [own];
+		const finer = this.finer(z, x, y, STAND_IN_LEVELS, above);
+		if (finer.whole) return finer.tiles;
+		for (let zz = z - 1, s = 1; zz >= this.o.minZ; zz--, s++) {
+			const t = this.tiles.get(`${zz}/${x >> s}/${y >> s}` as TileKey);
+			if (t?.state === 'ready') return [t];
+		}
+		return finer.tiles;
+	}
+
+	/** the ready tiles under a tile, at most `levels` down, and whether they cover it whole */
+	private finer(z: number, x: number, y: number, levels: number, above: Set<string>): { tiles: Tile[]; whole: boolean } {
+		if (!levels || z >= this.o.maxZ || !above.has(`${z}/${x}/${y}`)) return { tiles: [], whole: false };
+		const tiles: Tile[] = [];
+		let whole = true;
+		for (const [cx, cy] of [[2 * x, 2 * y], [2 * x + 1, 2 * y], [2 * x, 2 * y + 1], [2 * x + 1, 2 * y + 1]]) {
+			const t = this.tiles.get(`${z + 1}/${cx}/${cy}` as TileKey);
+			if (t?.state === 'ready') { tiles.push(t); continue; }
+			const below = this.finer(z + 1, cx, cy, levels - 1, above);
+			tiles.push(...below.tiles);
+			whole &&= below.whole;
+		}
+		return { tiles, whole };
 	}
 
 	/**

@@ -55,3 +55,35 @@ describe('the pool round the camera', () => {
 		expect(asked.length).toBe(2);
 	});
 });
+
+describe('a re-layout of the scene (ea15)', () => {
+	const real = globalThis.fetch;
+	afterEach(() => { globalThis.fetch = real; });
+
+	it('keeps every name held, placed in the new frame, and asks nothing again', async () => {
+		const a = new Frame(50, 14, 0), b = new Frame(50.15, 14.25, 0);     // ~25 km apart: past REFRAME_M
+		let asked = 0;
+		globalThis.fetch = (async () => {
+			asked++;
+			return new Response(JSON.stringify({ labels: [
+				{ name: 'Near', kind: 'peak', lat: 50.01, lon: 14, h: 350 },
+				{ name: 'Far', kind: 'town', lat: 50.3, lon: 14.4, h: 250, population: 9000 }] }));
+		}) as typeof fetch;
+		let done!: () => void;
+		const finished = new Promise<void>((r) => (done = r));
+		const pool = new LabelPool({ url: '/api/terrain/labels', frame: a, chunks: 1,
+			onChange: () => { if (pool.version >= 2 && !pool.stats.loading) done(); } });
+		pool.update([0, 0, 0]);
+		await finished;
+		expect(pool.named(null, 0, [0, 0, 0]).map((n) => n.name).sort()).toEqual(['Far', 'Near']);
+		pool.setFrame(b);
+		const moved = Object.fromEntries(pool.named(null, 0, [0, 0, 0]).map((n) => [n.name, n.s]));
+		expect(Object.keys(moved).sort()).toEqual(['Far', 'Near']);
+		const want = b.fromGeodetic(50.01, 14, 350);
+		for (let i = 0; i < 3; i++) expect(moved.Near[i]).toBeCloseTo(want[i], 3);
+		// the camera at the same place, in the new frame: still inside the recentre distance, nothing asked
+		pool.update(b.fromGeodetic(...a.toGeodetic(0, 0, 0)));
+		expect(asked).toBe(1);
+		pool.dispose();
+	});
+});

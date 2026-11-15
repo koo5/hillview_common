@@ -125,6 +125,18 @@ export class LabelPool {
 		return out;
 	}
 
+	/**
+	 * The scene was laid out about another origin (WorldScene's re-layout, every 20 km of the observer's way): the names
+	 * held are placed in it on the next named(), nothing is asked again. Until 2026-11-15 the scene made a new, empty
+	 * pool there, and every name was gone until its chunks came back ("every once in a moment, all the labels
+	 * disappear for a moment", the operator, 11-10; ea15).
+	 */
+	setFrame(next: Frame) {
+		if (next === this.o.frame) return;
+		this.o.frame = next;
+		for (const it of this.items.values()) it.p = undefined;
+	}
+
 	dispose() {
 		this.disposed = true;
 		this.requests.release(this.requestScope);

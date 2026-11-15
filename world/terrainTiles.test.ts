@@ -250,3 +250,92 @@ describe('terrain tiles', () => {
 		expect(Number.isFinite(g.h[n * n - 1])).toBe(false);
 	});
 });
+
+describe('a loading tile is stood in for by what is loaded there (ea15)', () => {
+	type Internals = { tiles: Map<string, object>; wanted: string[]; tick: number; compose(): void; pump(): void };
+	const z = 12, x = 2210, y = 1388;
+	const key = (zz: number, xx: number, yy: number) => `${zz}/${xx}/${yy}`;
+	const children = (zz: number, xx: number, yy: number): [number, number, number][] =>
+		[[0, 0], [1, 0], [0, 1], [1, 1]].map(([a, b]) => [zz + 1, 2 * xx + a, 2 * yy + b]);
+	/** a scene whose loaded tiles are `ready` (a ready tile `bare` has no heights: no mesh), wanting `wanted` */
+	const scene = (wanted: [number, number, number][], ready: [number, number, number][], bare: [number, number, number][] = []) => {
+		const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', frame, requests: new WorldRequests(), globe: false });
+		const inner = tt as unknown as Internals;
+		const meshes = new Map<string, THREE.Mesh>();
+		for (const [zz, xx, yy] of [...ready, ...bare]) {
+			const mesh = ready.some((r) => r.join() === [zz, xx, yy].join()) ? new THREE.Mesh() : undefined;
+			if (mesh) meshes.set(key(zz, xx, yy), mesh);
+			inner.tiles.set(key(zz, xx, yy), { key: key(zz, xx, yy), z: zz, x: xx, y: yy, state: 'ready', mesh, used: 0 });
+		}
+		for (const [zz, xx, yy] of wanted) if (!inner.tiles.has(key(zz, xx, yy)))
+			inner.tiles.set(key(zz, xx, yy), { key: key(zz, xx, yy), z: zz, x: xx, y: yy, state: 'loading', used: 0 });
+		inner.wanted = wanted.map((w) => key(...w));
+		inner.tick = 1;
+		inner.compose();
+		const drawn = tt.group.children.map((c) => [...meshes].find(([, m]) => m === c)?.[0]).sort();
+		return { tt, inner, drawn };
+	};
+	const kids = children(z, x, y);
+	const ancestor: [number, number, number] = [z - 2, x >> 2, y >> 2];
+
+	it('by its finer tiles when they cover it (they are drawn already: no pop), before a coarser ancestor', () => {
+		expect(scene([[z, x, y]], [...kids, ancestor]).drawn).toEqual(kids.map((k) => key(...k)).sort());
+		// two levels down: three children and the fourth's four children cover it whole
+		const grand = children(...kids[3]);
+		expect(scene([[z, x, y]], [...kids.slice(0, 3), ...grand, ancestor]).drawn)
+			.toEqual([...kids.slice(0, 3), ...grand].map((k) => key(...k)).sort());
+		// a ready child with no heights covers its part too: that ground is known to be empty
+		expect(scene([[z, x, y]], [...kids.slice(0, 3), ancestor], [kids[3]]).drawn).toEqual(kids.slice(0, 3).map((k) => key(...k)).sort());
+	});
+
+	it('by its nearest loaded ancestor when the finer ones leave a gap, and by those finer ones when nothing else is', () => {
+		expect(scene([[z, x, y]], [...kids.slice(0, 3), ancestor]).drawn).toEqual([key(...ancestor)]);
+		// the ancestor stands in for that whole loading tile: no finer tile under it is drawn too
+		expect(scene([[z, x, y]], [...kids.slice(0, 3)]).drawn).toEqual(kids.slice(0, 3).map((k) => key(...k)).sort());
+		// its own ground once it is in, and nothing in its place
+		expect(scene([[z, x, y]], [[z, x, y], ...kids, ancestor]).drawn).toEqual([key(z, x, y)]);
+	});
+
+	it('a stand-in is marked used, so evict() keeps it while it stands in', () => {
+		const { inner } = scene([[z, x, y]], [...kids]);
+		for (const k of kids) expect((inner.tiles.get(key(...k)) as { used: number }).used).toBe(1);
+	});
+
+	it('an incomplete tile split into its children stays drawn for them until they are in (Ground 2)', async () => {
+		const real = globalThis.fetch;
+		const n = 65, buf = new ArrayBuffer(5 * n * n);
+		new Float32Array(buf, 0, n * n).fill(300);
+		new Uint8Array(buf, 4 * n * n, n * n).fill(1);
+		let served!: () => void;
+		const parentIn = new Promise<void>((r) => (served = r));
+		globalThis.fetch = ((u: string, init: RequestInit) => {
+			// the parent: in, but incomplete (earth is still fetching its source data); the children never answer
+			if (u === `http://e/${key(z, x, y)}`) {
+				setTimeout(served, 0);
+				return Promise.resolve(new Response(buf, { headers: { 'X-Tile-Complete': '0', 'X-Tile-Format': 'f32' } }));
+			}
+			return new Promise((_, no) => init.signal?.addEventListener('abort', () => no(init.signal?.reason)));
+		}) as typeof fetch;
+		const requests = new WorldRequests();
+		try {
+			const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', frame, requests, globe: false });
+			const inner = tt as unknown as Internals;
+			inner.wanted = [key(z, x, y)];
+			inner.pump();
+			await parentIn;
+			await new Promise((r) => setTimeout(r, 0));
+			const parent = inner.tiles.get(key(z, x, y)) as { state: string; mesh?: THREE.Mesh; complete?: boolean };
+			expect([parent.state, parent.complete, !!parent.mesh]).toEqual(['ready', false, true]);
+			// the selection splits it: its retry is cancelled, and it stands in for the four children loading
+			inner.wanted = kids.map((k) => key(...k));
+			inner.pump();
+			inner.compose();
+			expect(inner.tiles.get(key(z, x, y))).toBe(parent);
+			expect(tt.group.children).toEqual([parent.mesh]);
+			tt.dispose();
+		} finally {
+			requests.dispose();
+			globalThis.fetch = real;
+		}
+	});
+});
