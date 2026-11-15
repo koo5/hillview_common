@@ -1,5 +1,5 @@
 import type {CopcChunk, CopcNode} from './copcSource';
-import {DENSE_CLOUD, SPARSE_CLOUD} from './worldClouds';
+import {DENSE_CLOUD, FOLIAGE_CLOUD} from './worldClouds';
 
 const MiB=1024*1024;
 const chunkBytes=(c:CopcChunk)=>c.positions.byteLength+c.colors.byteLength+
@@ -101,8 +101,9 @@ export class WorldResidency {
 		const generation=this.generation,mode=this.mode,hidden=this.hidden;
 		const n=raw.positions.length/3,types=raw.cloudTypes??null;
 		// THE TAGS ARE READ ONLY TO KEEP THE DENSE ROWS: a merged world's tree carries them, a run's tree is one cloud and
-		// has none (RECON-UI's ui09). Mode 'all' keeps every row, so it takes a block without tags as it is; 'dense'
-		// cannot tell its rows apart without them and refuses (EARTH, 2026-11-11).
+		// has none (RECON-UI's ui09). Mode 'all' keeps every row (in a world with foliage: dense and foliage, ATLAS2's
+		// aw02), so it takes a block without tags as it is; 'dense' cannot tell its rows apart without them and refuses
+		// (EARTH, 2026-11-11).
 		if(!types&&mode==='dense')throw new Error('Invalid tagged world point block: dense rows need their cloud tags');
 		if(!Number.isInteger(n)||(types&&types.length!==n)||raw.colors.length!==n*3||
 			(raw.views&&raw.views.length!==n))throw new Error('Invalid tagged world point block');
@@ -115,7 +116,7 @@ export class WorldResidency {
 		let count=0;
 		for(let i=0;i<n;i++){
 			if(i%16384===0)await yieldWork();
-			if(types&&types[i]!==DENSE_CLOUD&&types[i]!==SPARSE_CLOUD)throw new Error('Unknown world cloud-source tag');
+			if(types&&types[i]!==DENSE_CLOUD&&types[i]!==FOLIAGE_CLOUD)throw new Error('Unknown world cloud-source tag');
 			if((mode==='all'||types![i]===DENSE_CLOUD)&&valid(i))count++;
 		}
 		if(generation!==this.generation)return false;

@@ -3,7 +3,7 @@ import { LazPerf } from 'laz-perf';
 import lazPerfWasm from 'laz-perf/lib/laz-perf.wasm?url';
 import type { DecodeInput, DecodeRequest, DecodeReply } from './copcDecoder';
 import type { CopcChunk } from './copcSource';
-import { DENSE_CLOUD } from './worldClouds';
+import { DENSE_CLOUD, FOLIAGE_CLOUD } from './worldClouds';
 
 // This module is only loaded in the worker: WASM compilation, LAZ decompression and
 // packing xyz/RGB/view arrays never execute on the renderer's thread.
@@ -98,7 +98,9 @@ async function decode(input: DecodeInput): Promise<CopcChunk> {
 		cloudTypes = new Uint8Array(n);
 		for (let i=0;i<n;i++) {
 			const kind=getType(i*step);
-			if (kind!==DENSE_CLOUD) throw new Error('World octree contains non-dense points; rebuild the dense-only browser world');
+			// dense, or a solve's foliage layer (its manifest names the source: worldClouds); the retired sparse
+			// tag and anything else is a tree to rebuild
+			if (kind!==DENSE_CLOUD&&kind!==FOLIAGE_CLOUD) throw new Error(`World octree contains points of kind ${kind}, neither dense nor foliage; rebuild it`);
 			cloudTypes[i]=kind;
 		}
 	}

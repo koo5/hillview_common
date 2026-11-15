@@ -5,23 +5,23 @@ const node=(key:string,points=3):CopcNode=>({key,depth:0,pointCount:points,bound
 const chunk=(types:number[])=>({positions:new Float32Array(types.flatMap((_,i)=>[i+1,i+2,i+3])),
 	colors:new Uint8Array(types.flatMap(()=>[20,30,40])),cloudTypes:new Uint8Array(types),views:null});
 
-test('dense residency counts the real filtered rows and preserves sparse-only zero blocks',async()=>{
+test('dense residency counts the real filtered rows and keeps foliage-only blocks as empty ones',async()=>{
 	const r=new WorldResidency(48,32),a=node('a'),b=node('b');r.reconcile([a,b],'dense');
-	const raw=chunk([1,2,1]);expect(await r.accept(a,raw)).toBe(true);
-	expect(await r.accept(b,chunk([2,2,2]))).toBe(true);
+	const raw=chunk([1,3,1]);expect(await r.accept(a,raw)).toBe(true);
+	expect(await r.accept(b,chunk([3,3,3]))).toBe(true);
 	expect(r.summary).toMatchObject({points:2,geometryBytes:48,decodedBytes:32,nodes:2,complete:true});
 	expect([...r.blocks[0].positions]).toEqual([1,2,3,3,4,5]);
-	expect([...raw.cloudTypes]).toEqual([1,2,1]);
+	expect([...raw.cloudTypes]).toEqual([1,3,1]);
 	expect(r.blocks[1].positions.length).toBe(0);
 });
 
 test('bounded batches progress through deep nodes, deduplicate and visibly stop at memory limit',async()=>{
 	const r=new WorldResidency(96,64),nodes=Array.from({length:5},(_,i)=>({...node(String(i),2),depth:i}));
 	r.reconcile(nodes,'all');expect(r.nextBatch(3,3).map(n=>n.key)).toEqual(['0']);
-	await r.accept(nodes[0],chunk([1,2]));await r.accept(nodes[0],chunk([1,2]));
+	await r.accept(nodes[0],chunk([1,3]));await r.accept(nodes[0],chunk([1,3]));
 	expect(r.summary.points).toBe(2);expect(r.nextBatch(3,4).map(n=>n.key)).toEqual(['1']);
-	await r.accept(nodes[1],chunk([1,2]));expect(await r.accept(nodes[2],chunk([1,2]))).toBe(false);
-	await r.accept(nodes[3],chunk([1,2]));await r.accept(nodes[4],chunk([1,2]));
+	await r.accept(nodes[1],chunk([1,3]));expect(await r.accept(nodes[2],chunk([1,3]))).toBe(false);
+	await r.accept(nodes[3],chunk([1,3]));await r.accept(nodes[4],chunk([1,3]));
 	expect(r.summary).toMatchObject({nodes:2,points:4,pending:0,limited:3,complete:false});
 	expect(r.nextBatch()).toEqual([]);
 });
@@ -35,7 +35,7 @@ test('a view change keeps what is loaded until a wanted block needs its room; mo
 	await r.accept(b,chunk([1,1]));expect(r.summary).toMatchObject({complete:true,retained:0,points:2});
 	expect(r.resident.map(n=>n.key)).toEqual(['b']);
 	r.reconcile([b],'all');expect(r.summary.nodes).toBe(0);expect(r.nextBatch()).toEqual([b]);
-	await r.accept(b,chunk([1,2]));expect([...r.blocks[0].cloudTypes!]).toEqual([1,2]);
+	await r.accept(b,chunk([1,3]));expect([...r.blocks[0].cloudTypes!]).toEqual([1,3]);
 	r.clear();expect(r.summary.points).toBe(0);
 });
 
@@ -107,7 +107,8 @@ test('a placement is what the residency holds and charges; it may drop rows but 
 
 test('unknown or missing source tags fail before publishing a block',async()=>{
 	const r=new WorldResidency(),a=node('a');r.reconcile([a],'dense');
-	await expect(r.accept(a,chunk([1,0,2]))).rejects.toThrow('Unknown');
+	await expect(r.accept(a,chunk([1,0,3]))).rejects.toThrow('Unknown');
+	await expect(r.accept(a,chunk([1,2,1]))).rejects.toThrow('Unknown');     // the retired sparse tag
 	await expect(r.accept(a,{...chunk([1]),cloudTypes:undefined})).rejects.toThrow('dense rows need their cloud tags');
 	await expect(r.accept(a,{...chunk([1,1]),cloudTypes:new Uint8Array([1])})).rejects.toThrow('Invalid');
 	expect(r.summary.nodes).toBe(0);
@@ -128,7 +129,7 @@ test('a tree of one cloud (a run\'s) is held untagged in mode all, whole or samp
 test('a view or source change during yielded filtering cannot publish stale chunks',async()=>{
  const r=new WorldResidency(),a=node('a'),b=node('b');r.reconcile([a],'dense');
  let changed=false;
- expect(await r.accept(a,chunk([1,2,1]),async()=>{
+ expect(await r.accept(a,chunk([1,3,1]),async()=>{
   if(!changed){changed=true;r.reconcile([b],'all');}
  })).toBe(false);
  expect(r.summary).toMatchObject({points:0,nodes:0,pending:1});
@@ -147,19 +148,19 @@ test('a filled residency budget stops downloads rather than reading and rejectin
 test('an oversized visible node uses the remaining drawn-row budget and promotes after moving',async()=>{
  const r=new WorldResidency(96,64),a=node('a',2),b=node('b',6);
  r.reconcile([a,b],'dense');await r.accept(a,chunk([1,1]));
- expect(await r.accept(b,chunk([1,2,1,1,2,1]))).toBe(true);
+ expect(await r.accept(b,chunk([1,3,1,1,3,1]))).toBe(true);
  expect(r.summary).toMatchObject({points:4,geometryBytes:96,limited:1,complete:false});
  expect([...r.blocks[1].cloudTypes!]).toEqual([1,1]);
  expect([...r.blocks[1].positions]).toEqual([1,2,3,4,5,6]);
  expect(r.nextBatch()).toEqual([]);
  // a is retained until b's full rows need its room
  r.reconcile([b],'dense');expect(r.summary).toMatchObject({points:2,retained:1});
- await r.accept(b,chunk([1,2,1,1,2,1]));
+ await r.accept(b,chunk([1,3,1,1,3,1]));
  expect(r.summary).toMatchObject({points:4,limited:0,complete:true});
 });
 
 test('invalid and out-of-domain coordinates consume no drawn-row budget',async()=>{
- const r=new WorldResidency(48,32),a=node('a',5),c=chunk([1,1,1,2,1]);
+ const r=new WorldResidency(48,32),a=node('a',5),c=chunk([1,1,1,3,1]);
  c.positions[3]=NaN;c.positions[6]=1000001;
  r.reconcile([a],'dense');await r.accept(a,c);
  expect(r.summary).toMatchObject({points:2,geometryBytes:48,decodedBytes:32,limited:0});
