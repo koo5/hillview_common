@@ -975,7 +975,13 @@ export class TerrainTiles {
 						// (X-Tile-Complete: 0) is ready and drawn while its retry waits, and it leaves the wanted set
 						// when the selection splits it: its children then need it as their stand-in (ea15, Ground 2)
 						if (!this.wanted.includes(key)) {
-							if (t.state !== 'ready') this.tiles.delete(key);
+							if (t.state !== 'ready') {
+								// a tile without its ground holds no mesh or photo: let go of them anyway, as evict() does
+								t.mesh?.geometry.dispose();
+								(t.mesh?.material as THREE_NS.Material | undefined)?.dispose();
+								t.tex?.dispose();
+								this.tiles.delete(key);
+							}
 						}
 						else if (!t.h) t.state = 'failed';
 					} else if (state !== 'loaded' && !t.h) t.state = 'loading';
