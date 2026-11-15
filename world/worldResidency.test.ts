@@ -209,3 +209,81 @@ test('bulk batches stop at the remaining near-prefix room instead of prefetching
  // A single compressed node may need sampling; no extra nodes accompany it.
  expect(r.nextBatch(64,2000000)).toEqual([nodes[2]]);
 });
+
+test('a snapshot adopted by an empty residency is the same blocks, and its view reads nothing again (ea14 A-2b)',async()=>{
+	const r=new WorldResidency(24*10,16*10),a=node('a',2),b={...node('b',2),depth:3},ca=chunk([1,1]),cb=chunk([1,1]);
+	r.reconcile([a,b],'dense');await r.accept(a,ca);await r.accept(b,cb);
+	const s=r.snapshot('tree|placed');r.clear();
+	// taken as it was, not copied, and the residency it came from leaving changes nothing in it
+	expect(Object.isFrozen(s)&&Object.isFrozen(s.blocks)&&Object.isFrozen(s.blocks[0])).toBe(true);
+	expect(s.blocks.map(x=>x.chunk)).toEqual([ca,cb]);expect(s.blocks[0].chunk).toBe(ca);
+	const q=new WorldResidency(24*10,16*10);expect(q.adopt(s,'tree|placed')).toBe(0);
+	expect(q.blocks[0]).toBe(ca);expect(q.blocks[1]).toBe(cb);
+	// no plan yet: held and drawn, as retained blocks
+	expect(q.summary).toMatchObject({points:4,decodedBytes:64,nodes:0,retained:2,limited:0});
+	q.reconcile([a,b],'dense');expect(q.nextBatch()).toEqual([]);
+	expect(q.summary).toMatchObject({points:4,nodes:2,retained:0,pending:0,complete:true});
+	expect(q.planned.map(n=>n.key)).toEqual(['a','b']);
+	// a view wanting more reads only what it lacks
+	const c=node('c',2);q.reconcile([a,b,c],'dense');expect(q.nextBatch()).toEqual([c]);
+});
+
+test('an adopted sampled block is read again at the next reconcile; another mode or hidden set drops them all',async()=>{
+	const r=new WorldResidency(24*3,16*3),a=node('a',2),b={...node('b',2),depth:4};
+	r.reconcile([a,b],'dense');await r.accept(a,chunk([1,1]));await r.accept(b,chunk([1,1]));
+	expect(r.summary).toMatchObject({points:3,limited:1});   // b kept one of its two rows
+	const s=r.snapshot('k'),q=new WorldResidency(24*3,16*3);q.adopt(s,'k');
+	expect(q.summary).toMatchObject({points:3,limited:1});expect(q.nextBatch()).toEqual([]);
+	q.reconcile([a,b],'dense');expect(q.summary).toMatchObject({points:2,limited:0});expect(q.nextBatch()).toEqual([b]);
+	const m=new WorldResidency(24*3,16*3);m.adopt(s,'k');m.reconcile([a],'all');expect(m.summary.points).toBe(0);
+	const h=new WorldResidency(24*3,16*3);h.adopt(s,'k');h.reconcile([a],'dense',[7]);expect(h.summary.points).toBe(0);
+	// the snapshot's own mode and hidden sources come with it: a run's tree ('all'), a world with a run removed
+	const t=new WorldResidency(240,180),u=node('u',2);t.reconcile([u],'all',[3]);
+	await t.accept(u,{...chunk([1,3]),views:new Uint16Array([1,2])});
+	const v=new WorldResidency(240,180);v.adopt(t.snapshot('k'),'k');v.reconcile([u],'all',[3]);
+	expect(v.summary).toMatchObject({points:2,nodes:1});
+});
+
+test('a placed snapshot keeps its placed rows and their charge',async()=>{
+	const r=new WorldResidency(24*10,30*4),a=node('a',3);
+	const place:WorldPlacement={bytesPerRow:30,rows:async(c)=>({...c,positions:c.positions.map(v=>v+100),
+		linear:new Float32Array(c.positions.length)})};
+	r.reconcile([a],'dense');await r.accept(a,chunk([1,1,1]),undefined,place);
+	const q=new WorldResidency(24*10,30*4);q.adopt(r.snapshot('k'),'k');
+	expect([...q.blocks[0].positions.slice(0,3)]).toEqual([101,102,103]);
+	expect(q.summary).toMatchObject({points:3,decodedBytes:84});
+});
+
+test('adopt keeps its own bounds: the finest blocks go first, then the least recently wanted',async()=>{
+	const r=new WorldResidency(24*10,16*10);
+	const old={...node('old',2),depth:1},coarse={...node('coarse',2),depth:1},fine={...node('fine',2),depth:5};
+	r.reconcile([old],'dense');await r.accept(old,chunk([1,1]));
+	r.reconcile([coarse,fine],'dense');await r.accept(coarse,chunk([1,1]));await r.accept(fine,chunk([1,1]));
+	const s=r.snapshot('k'),q=new WorldResidency(24*2,16*2);
+	expect(q.adopt(s,'k')).toBe(2);
+	expect(q.resident.map(n=>n.key)).toEqual(['coarse']);expect(q.summary).toMatchObject({points:2,decodedBytes:32});
+	// the same order is kept for the room a later block needs: old, wanted longer ago, before coarse
+	const w=new WorldResidency(24*4,16*4);expect(w.adopt(s,'k')).toBe(1);
+	const next=node('next',2);w.reconcile([next],'dense');await w.accept(next,chunk([1,1]));
+	expect(w.resident.map(n=>n.key)).toEqual(['next','coarse']);
+});
+
+test('adopt refuses another key, a residency already holding blocks, and a block whose arrays disagree',async()=>{
+	const r=new WorldResidency(24*10,16*10),a=node('a',2);r.reconcile([a],'dense');await r.accept(a,chunk([1,1]));
+	const s=r.snapshot('k');
+	expect(()=>r.snapshot('')).toThrow('needs the key');
+	expect(()=>new WorldResidency(240,160).adopt(s,'other')).toThrow('cannot be adopted as other');
+	expect(()=>r.adopt(s,'k')).toThrow('Only an empty residency');
+	const bad={...s,blocks:[{...s.blocks[0],chunk:{...s.blocks[0].chunk,colors:new Uint8Array(3)}}]};
+	expect(()=>new WorldResidency(240,160).adopt(bad,'k')).toThrow('Invalid residency snapshot block');
+	expect(()=>new WorldResidency(240,160).adopt({...s,blocks:[s.blocks[0],s.blocks[0]]},'k')).toThrow('Invalid');
+});
+
+test('adopt ends an accept in flight, as clear does',async()=>{
+	const q=new WorldResidency(240,160),a=node('a',2),b=node('b',2);q.reconcile([b],'dense');
+	let release!:()=>void;const gate=new Promise<void>(go=>{release=go;});
+	const pending=q.accept(b,chunk([1,1]),()=>gate);
+	const r=new WorldResidency(240,160);r.reconcile([a],'dense');await r.accept(a,chunk([1,1]));
+	q.adopt(r.snapshot('k'),'k');release();
+	expect(await pending).toBe(false);expect(q.resident.map(n=>n.key)).toEqual(['a']);
+});

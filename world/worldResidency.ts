@@ -17,6 +17,21 @@ export type WorldPlacement = {
 	rows: (chunk: CopcChunk, yieldWork: () => Promise<void>) => Promise<CopcChunk>;
 };
 
+/**
+ * What a residency held when snapshot() was called. Nothing is copied: the residency's own blocks, which it never
+ * writes after accept (sampling and placement make new arrays), so the record stays as taken while the residency goes
+ * on. The caller must not write them either, as with BlockCloud. `key` names the tree and placement the blocks are of
+ * (the caller's own name: the residency knows neither). `sampled`: kept with fewer rows than the block has (at the
+ * budget), so the next reconcile drops it to be read again, as in the residency it came from. `age`: reconciles since
+ * it was last wanted, which orders the least recently wanted first when room is made.
+ */
+export type ResidencySnapshot = Readonly<{
+	key: string;
+	mode: 'dense'|'all';
+	hidden: readonly number[];
+	blocks: readonly Readonly<{node: CopcNode; chunk: CopcChunk; sampled: boolean; age: number}>[];
+}>;
+
 /** One viewer's full-depth nodes, charged after filtering by native source kind.
  * Two bounds: maxGeometryBytes, a POINT cap counted at 24 bytes a point (what a concatenated float32 XYZ + linear
  * float32 RGB geometry took), and maxDecodedBytes for what the residency itself holds: the decoded rows (16 bytes/row,
@@ -31,6 +46,11 @@ export type WorldPlacement = {
  * still drawn (blocks/resident list it after the plan's), still charged to the budget. It leaves only when a wanted
  * block needs its room: the finest retained first, then the least recently wanted, then (as before) lower-ranked
  * wanted blocks. A sampled (blocked) block, a mode change and a hidden-source change still drop it.
+ *
+ * A SOURCE TAKEN OUT OF VIEW COMES BACK AS IT WAS (ea14 A-2b, RECON-UI: a viewer flipping between two runs).
+ * snapshot() names what the residency holds, and adopt() hands it to an empty residency: the same blocks on the same
+ * arrays, with nothing read, decoded or placed again. A viewer drawing them on their own arrays (blockCloud.ts) has
+ * nothing to copy either.
  */
 export class WorldResidency {
 	private chunks=new Map<string,CopcChunk>();
@@ -193,6 +213,48 @@ export class WorldResidency {
 			nodes:this.chunks.size-retained,eligible:this.eligible.length,pending,limited:this.blocked.size,retained,
 			complete:pending===0&&this.blocked.size===0};
 	}
+	/** What this residency holds, as it holds it (ResidencySnapshot), in `resident`'s order. It keeps holding them:
+	 * clear() is the caller's, when the source leaves. */
+	snapshot(key:string):ResidencySnapshot{
+		if(!key)throw new Error('A residency snapshot needs the key of the tree and placement its blocks are of');
+		const blocks=this.resident.map(n=>Object.freeze({node:n,chunk:this.chunks.get(n.key)!,sampled:this.blocked.has(n.key),
+			age:this.generation-this.wantedAt.get(n.key)!}));
+		return Object.freeze({key,mode:this.mode,hidden:Object.freeze([...this.hidden].sort((a,b)=>a-b)),blocks:Object.freeze(blocks)});
+	}
+
+	/**
+	 * An empty residency takes a snapshot's blocks as its own (ea14 A-2b): its mode and hidden sources too, so the next
+	 * reconcile of the same keeps them, and another drops them as it would its own. `key` must be the snapshot's: the
+	 * caller says it is the same tree and placement. The blocks come in as retained (no plan yet): the caller's
+	 * reconcile makes the ones its view wants wanted again, and nextBatch reads only what they lack. Like clear(), it
+	 * ends any accept in flight. Its bounds hold: past them it lets go of the finest blocks first, then the least
+	 * recently wanted (a budget lowered meanwhile). Returns how many it let go.
+	 */
+	adopt(s:ResidencySnapshot, key:string):number{
+		if(key!==s.key)throw new Error(`A residency snapshot of ${s.key} cannot be adopted as ${key}`);
+		if(this.chunks.size)throw new Error('Only an empty residency adopts a snapshot');
+		const keys=new Set<string>();
+		for(const {node,chunk:c,age} of s.blocks){
+			const n=c.positions.length/3;
+			if(keys.has(node.key)||!Number.isInteger(n)||c.colors.length!==n*3||(c.views&&c.views.length!==n)||
+				(c.cloudTypes&&c.cloudTypes.length!==n)||(c.linear&&c.linear.length!==n*3)||!Number.isSafeInteger(age)||age<0||
+				(s.hidden.length&&!c.views))throw new Error('Invalid residency snapshot block');
+			keys.add(node.key);
+		}
+		this.clear();
+		const hidden=[...new Set(s.hidden)].sort((a,b)=>a-b);
+		this.mode=s.mode;this.hidden=new Set(hidden);this.hiddenKey=hidden.join(',');
+		for(const {node,chunk,sampled,age} of s.blocks){
+			this.chunks.set(node.key,chunk);this.nodes.set(node.key,node);this.wantedAt.set(node.key,this.generation-age);
+			if(sampled)this.blocked.add(node.key);
+			this.points+=chunk.positions.length/3;this.decodedBytes+=chunkBytes(chunk);
+		}
+		const fits=()=>this.points<=Math.floor(this.maxGeometryBytes/24)&&this.decodedBytes<=this.maxDecodedBytes;
+		let dropped=0;
+		for(const k of this.retainedOrder()){if(fits())break;this.drop(k);dropped++;}
+		return dropped;
+	}
+
 	clear(){
 		this.generation++;this.chunks.clear();this.nodes.clear();this.wantedAt.clear();this.wanted.clear();
 		this.blocked.clear();this.eligible=[];this.points=0;this.decodedBytes=0;
