@@ -49,6 +49,8 @@ export function srgbPointsMaterial(THREE: Three, parameters: THREE_NS.PointsMate
  *   render on, a block out of view would upload whenever it came into view, outside any cap (RECON-UI's review of
  *   A-1). `culling = false` draws every block: a shader that moves points off their spheres (the workbench's relief
  *   exaggeration) would otherwise have blocks culled while their points are on screen (EARTH's review of A-2).
+ *   While `object` is hidden nothing renders, so blocks that join meanwhile all upload in the frame it shows again,
+ *   past the cap (RECON-UI's review of the culling). A viewer hiding it for long syncs after it shows.
  * - One material for every block: point size and colour are set once for the cloud.
  * - `attributes(rows)`: more per-point attributes a viewer's shader reads (the workbench's solve tints read the placed
  *   rows' source ids, RECON-UI's ui13), made when a block joins, on the block's own arrays too, and counted in the
