@@ -46,26 +46,34 @@ export function srgbPointsMaterial(THREE: Three, parameters: THREE_NS.PointsMate
  *   wait, so a viewer that draws on demand asks for another frame.
  * - Each block has its bounding sphere, so three draws only the blocks in the frustum.
  * - One material for every block: point size and colour are set once for the cloud.
+ * - `attributes(rows)`: more per-point attributes a viewer's shader reads (the workbench's solve tints read the placed
+ *   rows' source ids, RECON-UI's ui13), made when a block joins, on the block's own arrays too, and counted in the
+ *   frame's upload. `drawnBlocks()`: the joined blocks and their Points, for picking and on-screen counts.
  */
-export class BlockCloud {
+export class BlockCloud<R extends BlockRows = BlockRows> {
 	/** every drawn block; its matrix carries the cloud's frame into the scene */
 	readonly object: THREE_NS.Group;
 	readonly material: THREE_NS.PointsMaterial;
-	private readonly drawn = new Map<BlockRows, THREE_NS.Points | null>();
-	private waiting: BlockRows[] = [];
+	private readonly drawn = new Map<R, THREE_NS.Points | null>();
+	private waiting: R[] = [];
 	private readonly uploadBytes: number;
 	private readonly ownsMaterial: boolean;
+	private readonly attributes: ((rows: R) => Record<string, THREE_NS.BufferAttribute>) | null;
 
-	constructor(private readonly THREE: Three, o: { material?: THREE_NS.PointsMaterial; uploadBytes?: number } = {}) {
+	constructor(private readonly THREE: Three, o: {
+		material?: THREE_NS.PointsMaterial; uploadBytes?: number;
+		attributes?: (rows: R) => Record<string, THREE_NS.BufferAttribute>;
+	} = {}) {
 		this.uploadBytes = o.uploadBytes ?? BLOCK_UPLOAD_BYTES;
 		if (!(this.uploadBytes > 0)) throw new Error(`a block cloud uploads a positive number of bytes a frame, not ${this.uploadBytes}`);
 		this.ownsMaterial = !o.material;
 		this.material = o.material ?? srgbPointsMaterial(THREE);
+		this.attributes = o.attributes ?? null;
 		this.object = new THREE.Group();
 	}
 
 	/** The residency's held blocks now, in its rank order (nearest first). */
-	sync(blocks: readonly BlockRows[]) {
+	sync(blocks: readonly R[]) {
 		const held = new Set(blocks);
 		for (const [rows, points] of this.drawn) {
 			if (held.has(rows)) continue;
@@ -79,9 +87,12 @@ export class BlockCloud {
 	step(): boolean {
 		let bytes = 0, taken = 0;
 		for (const rows of this.waiting) {
-			const cost = blockBytes(rows);
+			// a block's extra attributes are made where it is costed: a block over this frame's cap waits, and they
+			// are made again when it joins (they wrap its own arrays, so that costs no copy)
+			const extra = this.extraOf(rows);
+			const cost = blockBytes(rows) + Object.values(extra).reduce((a, x) => a + x.array.byteLength, 0);
 			if (taken && bytes + cost > this.uploadBytes) break;
-			this.add(rows);
+			this.add(rows, extra);
 			bytes += cost;
 			taken++;
 		}
@@ -89,13 +100,24 @@ export class BlockCloud {
 		return this.waiting.length > 0;
 	}
 
-	private add(rows: BlockRows) {
+	private extraOf(rows: R): Record<string, THREE_NS.BufferAttribute> {
+		const extra = this.attributes?.(rows) ?? {};
+		const n = rows.positions.length / 3;
+		for (const [name, a] of Object.entries(extra)) {
+			if (name === 'position' || name === 'color') throw new Error(`a block's extra attribute cannot be named ${name}: BlockCloud draws that`);
+			if (a.count !== n) throw new Error(`a block's extra attribute ${name} has ${a.count} rows for ${n} points`);
+		}
+		return extra;
+	}
+
+	private add(rows: R, extra: Record<string, THREE_NS.BufferAttribute>) {
 		const n = rows.positions.length / 3;
 		if (!Number.isInteger(n) || rows.colors.length !== n * 3) throw new Error('a block needs three colour bytes for each position');
 		if (!n) { this.drawn.set(rows, null); return; }
 		const THREE = this.THREE, g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(rows.positions, 3));
 		g.setAttribute('color', new THREE.BufferAttribute(rows.colors, 3, true));
+		for (const [name, a] of Object.entries(extra)) g.setAttribute(name, a);
 		g.computeBoundingSphere();
 		const points = new THREE.Points(g, this.material);
 		this.object.add(points);
@@ -112,6 +134,11 @@ export class BlockCloud {
 	/** held blocks not drawn yet */
 	get waitingBlocks(): number {
 		return this.waiting.length;
+	}
+
+	/** The joined blocks and their Points, in join order; an empty block (it draws nothing) is left out. */
+	*drawnBlocks(): IterableIterator<[R, THREE_NS.Points]> {
+		for (const [rows, points] of this.drawn) if (points) yield [rows, points];
 	}
 
 	dispose() {

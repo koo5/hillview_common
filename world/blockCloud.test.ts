@@ -6,7 +6,52 @@ const block = (n: number, at = 0): BlockRows => ({
 	positions: Float32Array.from({ length: n * 3 }, (_, i) => at + i),
 	colors: Uint8Array.from({ length: n * 3 }, (_, i) => i % 256)
 });
-const drawnRows = (c: BlockCloud) => c.object.children.map((p) => ((p as THREE.Points).geometry.getAttribute('position').array as Float32Array));
+const drawnRows = (c: { object: THREE.Group }) =>
+	c.object.children.map((p) => ((p as THREE.Points).geometry.getAttribute('position').array as Float32Array));
+type Sourced = BlockRows & { views: Uint16Array };
+const sourced = (n: number, at = 0): Sourced => ({ ...block(n, at), views: Uint16Array.from({ length: n }, (_, i) => i % 3) });
+
+test('extra attributes join with the block, on its own arrays, and count in the frame\'s upload (RECON-UI\'s ui13)', () => {
+	const a = sourced(10), b = sourced(10, 100);
+	const c = new BlockCloud<Sourced>(THREE, {
+		attributes: (rows) => ({ source: new THREE.BufferAttribute(rows.views, 1) }),
+		// a's position and colour bytes fit, its source ids do not: the cap counts them, so b waits a frame
+		uploadBytes: blockBytes(a) + blockBytes(b)
+	});
+	c.sync([a, b]);
+	expect([c.step(), c.waitingBlocks]).toEqual([true, 1]);
+	const g = (c.object.children[0] as THREE.Points).geometry;
+	expect(g.getAttribute('source').array).toBe(a.views);
+	expect(c.step()).toBe(false);
+	expect([...c.drawnBlocks()].map(([rows, p]) => [rows, (p as THREE.Points).geometry.getAttribute('source').array]))
+		.toEqual([[a, a.views], [b, b.views]]);
+});
+
+test('an extra attribute of the wrong length, or named like a drawn one, is refused', () => {
+	const short = new BlockCloud<Sourced>(THREE, { attributes: (rows) => ({ source: new THREE.BufferAttribute(rows.views.subarray(1), 1) }) });
+	short.sync([sourced(4)]);
+	expect(() => short.step()).toThrow('source has 3 rows for 4 points');
+	const clash = new BlockCloud<Sourced>(THREE, { attributes: (rows) => ({ color: new THREE.BufferAttribute(rows.views, 1) }) });
+	clash.sync([sourced(4)]);
+	expect(() => clash.step()).toThrow('cannot be named color');
+});
+
+test('drawnBlocks: the joined blocks in join order, without empty, waiting or dropped ones', () => {
+	const a = block(2), empty = block(0), b = block(2, 10), late = block(2, 20);
+	const c = new BlockCloud(THREE, { uploadBytes: blockBytes(a) + blockBytes(b) });
+	c.sync([a, empty, b, late]);
+	c.step();
+	expect([...c.drawnBlocks()].map(([rows]) => rows)).toEqual([a, b]);
+	c.sync([b, late, a]);
+	c.step();
+	expect([...c.drawnBlocks()].map(([rows]) => rows)).toEqual([a, b, late]);
+	c.sync([late]);
+	expect([...c.drawnBlocks()].map(([rows]) => rows)).toEqual([late]);
+	// a block let go and held again joins anew: last in join order
+	c.sync([late, a]);
+	c.step();
+	expect([...c.drawnBlocks()].map(([rows]) => rows)).toEqual([late, a]);
+});
 
 test('a block is drawn on its own arrays, colour bytes normalized, nothing copied', () => {
 	const c = new BlockCloud(THREE), a = block(4);
