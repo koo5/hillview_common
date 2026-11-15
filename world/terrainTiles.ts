@@ -114,6 +114,16 @@ const RES_UNKNOWN = 10;
 const STAND_IN_LEVELS = 3;
 
 /**
+ * A tile that knows the ground over it, so it may draw it or stand in for another: loaded, with heights (a mesh), or
+ * loaded complete with none (no ground there, truly). One served incomplete with no heights at all (X-Tile-Complete: 0
+ * while earth fetches its source data; retried in 30 s) knows nothing yet: it put nothing where the stand-in had drawn
+ * the ground until 2026-11-15 (ea15).
+ */
+function knows(t: Tile | undefined): t is Tile {
+	return t?.state === 'ready' && (!!t.mesh || t.complete !== false);
+}
+
+/**
  * A served tile's heights and sources, in either wire format (X-Tile-Format): `f32` -- float32
  * heights then a source byte each -- or `q16` -- b"HVQ1", a float64 base, int16 decimetre deltas
  * (each row's first sample against the row above's first, the others against their left
@@ -1038,7 +1048,7 @@ export class TerrainTiles {
 		// every key within STAND_IN_LEVELS above a ready tile: standIn looks down only where something is
 		const above = new Set<string>();
 		for (const t of this.tiles.values()) {
-			if (t.state !== 'ready') continue;
+			if (!knows(t)) continue;
 			for (let s = 1, z = t.z - 1; s <= STAND_IN_LEVELS && z >= this.o.minZ; s++, z--) above.add(`${z}/${t.x >> s}/${t.y >> s}`);
 		}
 		const show = new Set<THREE_NS.Mesh>();
@@ -1054,18 +1064,18 @@ export class TerrainTiles {
 	}
 
 	/**
-	 * The ready tiles that draw a wanted tile's ground now: itself; else its ready finer tiles, when they cover it whole
-	 * (they are on screen already: nothing pops); else its nearest ready ancestor; else what finer tiles there are.
-	 * A ready tile without a mesh (no heights there) draws nothing, and counts: that ground is known to be empty.
+	 * The tiles that draw a wanted tile's ground now: itself; else its finer tiles, when they cover it whole (they are
+	 * on screen already: nothing pops); else its nearest ancestor; else what finer tiles there are. Each one only if it
+	 * knows its ground (knows()).
 	 */
 	private standIn(z: number, x: number, y: number, above: Set<string>): Tile[] {
 		const own = this.tiles.get(`${z}/${x}/${y}` as TileKey);
-		if (own?.state === 'ready') return [own];
+		if (knows(own)) return [own];
 		const finer = this.finer(z, x, y, STAND_IN_LEVELS, above);
 		if (finer.whole) return finer.tiles;
 		for (let zz = z - 1, s = 1; zz >= this.o.minZ; zz--, s++) {
 			const t = this.tiles.get(`${zz}/${x >> s}/${y >> s}` as TileKey);
-			if (t?.state === 'ready') return [t];
+			if (knows(t)) return [t];
 		}
 		return finer.tiles;
 	}
@@ -1077,7 +1087,7 @@ export class TerrainTiles {
 		let whole = true;
 		for (const [cx, cy] of [[2 * x, 2 * y], [2 * x + 1, 2 * y], [2 * x, 2 * y + 1], [2 * x + 1, 2 * y + 1]]) {
 			const t = this.tiles.get(`${z + 1}/${cx}/${cy}` as TileKey);
-			if (t?.state === 'ready') { tiles.push(t); continue; }
+			if (knows(t)) { tiles.push(t); continue; }
 			const below = this.finer(z + 1, cx, cy, levels - 1, above);
 			tiles.push(...below.tiles);
 			whole &&= below.whole;

@@ -257,15 +257,18 @@ describe('a loading tile is stood in for by what is loaded there (ea15)', () => 
 	const key = (zz: number, xx: number, yy: number) => `${zz}/${xx}/${yy}`;
 	const children = (zz: number, xx: number, yy: number): [number, number, number][] =>
 		[[0, 0], [1, 0], [0, 1], [1, 1]].map(([a, b]) => [zz + 1, 2 * xx + a, 2 * yy + b]);
-	/** a scene whose loaded tiles are `ready` (a ready tile `bare` has no heights: no mesh), wanting `wanted` */
-	const scene = (wanted: [number, number, number][], ready: [number, number, number][], bare: [number, number, number][] = []) => {
+	/** a scene whose loaded tiles are `ready`, wanting `wanted`. A ready tile `bare` has no heights (no mesh), and
+	 * earth said so (complete); one `empty` came incomplete with none (earth still fetching its source data) */
+	const scene = (wanted: [number, number, number][], ready: [number, number, number][], bare: [number, number, number][] = [],
+		empty: [number, number, number][] = []) => {
 		const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', frame, requests: new WorldRequests(), globe: false });
 		const inner = tt as unknown as Internals;
 		const meshes = new Map<string, THREE.Mesh>();
-		for (const [zz, xx, yy] of [...ready, ...bare]) {
+		for (const [zz, xx, yy] of [...ready, ...bare, ...empty]) {
 			const mesh = ready.some((r) => r.join() === [zz, xx, yy].join()) ? new THREE.Mesh() : undefined;
 			if (mesh) meshes.set(key(zz, xx, yy), mesh);
-			inner.tiles.set(key(zz, xx, yy), { key: key(zz, xx, yy), z: zz, x: xx, y: yy, state: 'ready', mesh, used: 0 });
+			const complete = !empty.some((r) => r.join() === [zz, xx, yy].join());
+			inner.tiles.set(key(zz, xx, yy), { key: key(zz, xx, yy), z: zz, x: xx, y: yy, state: 'ready', mesh, complete, used: 0 });
 		}
 		for (const [zz, xx, yy] of wanted) if (!inner.tiles.has(key(zz, xx, yy)))
 			inner.tiles.set(key(zz, xx, yy), { key: key(zz, xx, yy), z: zz, x: xx, y: yy, state: 'loading', used: 0 });
@@ -294,6 +297,15 @@ describe('a loading tile is stood in for by what is loaded there (ea15)', () => 
 		expect(scene([[z, x, y]], [...kids.slice(0, 3)]).drawn).toEqual(kids.slice(0, 3).map((k) => key(...k)).sort());
 		// its own ground once it is in, and nothing in its place
 		expect(scene([[z, x, y]], [[z, x, y], ...kids, ancestor]).drawn).toEqual([key(z, x, y)]);
+	});
+
+	it('a tile served incomplete with no heights knows nothing yet: it never takes the place of drawn ground', () => {
+		// the wanted tile itself: the ancestor's ground stays until real heights come (main drew nothing there)
+		expect(scene([[z, x, y]], [ancestor], [], [[z, x, y]]).drawn).toEqual([key(...ancestor)]);
+		// a finer one: it does not complete the cover, so the ancestor stands in, not three children and a hole
+		expect(scene([[z, x, y]], [...kids.slice(0, 3), ancestor], [], [kids[3]]).drawn).toEqual([key(...ancestor)]);
+		// complete and empty is knowledge: no ground there, nothing drawn in its place
+		expect(scene([[z, x, y]], [ancestor], [[z, x, y]]).drawn).toEqual([]);
 	});
 
 	it('a stand-in is marked used, so evict() keeps it while it stands in', () => {
