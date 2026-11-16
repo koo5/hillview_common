@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { WorldRequests, RequestFailure, failureOf, requestHeaders, responseOrThrow, sameOrigin, type RequestSpec } from './worldRequests';
 const wait = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
 function gate() {
@@ -48,7 +48,11 @@ describe('world desired-data scheduler', () => {
 	test('desired reads recover after more than the former four attempts', async () => {
 		const q = new WorldRequests({ retryMs: 1 }); let calls = 0;
 		q.reconcile('view', [spec('a', async () => { if (++calls <= 6) throw new Error('busy'); })]);
-		await wait(150); expect(calls).toBe(7); expect(q.snapshot()[0].state).toBe('loaded'); q.dispose();
+		// the outcome, polled: six doubling back-offs from 1 ms are 63 ms of timers, and a fixed 150 ms wait failed
+		// under a loaded box (6 calls of 7)
+		await vi.waitFor(() => { expect(calls).toBe(7); expect(q.snapshot()[0].state).toBe('loaded'); },
+			{ timeout: 5000, interval: 5 });
+		q.dispose();
 	});
 	test('timeouts become retries and stop at the retry budget', async () => {
 		const q = new WorldRequests({ retryMs: 1 });
