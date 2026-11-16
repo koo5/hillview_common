@@ -836,8 +836,12 @@ export class TerrainTiles {
 		this.orthoScope = this.requests.scope('ortho');
 	}
 
+	/** `ortho` / `noOrtho`: wanted tiles with their photo, or known to have none. `orthoWanted`: wanted tiles that want a
+	 * photo now, as pumpOrtho chooses them (ground in, a mesh, big enough on screen: photoDzOf). Since photos follow
+	 * the screen (2026-11-02), a tile off screen wants none and is in neither count; with the view still, every tile
+	 * in orthoWanted ends in `ortho` or `noOrtho` once its request is answered. 0 without an orthoUrl. */
 	get stats() {
-		let ready = 0, loading = 0, failed = 0, ortho = 0, noOrtho = 0;
+		let ready = 0, loading = 0, failed = 0, ortho = 0, noOrtho = 0, orthoWanted = 0;
 		for (const k of this.wanted) {
 			const t = this.tiles.get(k);
 			if (t?.state === 'ready' && t.complete !== false) ready++;
@@ -845,8 +849,9 @@ export class TerrainTiles {
 			else loading++;
 			if (t?.ortho === 'ready') ortho++;
 			else if (t?.ortho === 'none') noOrtho++;
+			if (this.o.orthoUrl && t?.state === 'ready' && t.mesh && this.photoDzOf(t) !== null) orthoWanted++;
 		}
-		return { wanted: this.wanted.length, ready, loading, failed, cached: this.tiles.size, ortho, noOrtho };
+		return { wanted: this.wanted.length, ready, loading, failed, cached: this.tiles.size, ortho, noOrtho, orthoWanted };
 	}
 
 	/** settled: every wanted tile is loaded or has failed */

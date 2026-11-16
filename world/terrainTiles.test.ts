@@ -215,6 +215,30 @@ describe('terrain tiles', () => {
 		expect(photoDz(6, 3, 18, 20)).toBe(-0);
 	});
 
+	it('stats.orthoWanted: the wanted tiles that want a photo now -- in, with a mesh, on screen -- and only with an orthoUrl', () => {
+		type Inner = { tiles: Map<string, object>; wanted: string[]; looked: { cam: number[]; view: View } | null };
+		const cam = frame.fromGeodetic(frame.lat, frame.lon, frame.h + 2);
+		const north = frame.fromGeodetic(frame.lat + 0.001, frame.lon, frame.h + 2);
+		const view: View = { dir: [north[0] - cam[0], north[1] - cam[1], north[2] - cam[2]], fovY: 55, aspect: 1.6, heightPx: 800 };
+		const z = 13;
+		const at = (dLat: number) => tileOf(frame.lat + dLat, frame.lon, z);
+		const tile = (xy: [number, number], mesh: boolean, state = 'ready') =>
+			({ key: `${z}/${xy[0]}/${xy[1]}`, z, x: xy[0], y: xy[1], state, mesh: mesh ? new THREE.Mesh() : undefined, hMean: frame.h,
+				h: new Float32Array(1), used: 0 });
+		const make = (orthoUrl?: string) => {
+			const tt = new TerrainTiles(THREE, { tileUrl: 'http://e/{z}/{x}/{y}', orthoUrl, frame, requests: new WorldRequests(), globe: false });
+			const inner = tt as unknown as Inner;
+			const tiles = [tile(at(0.2), true), tile(at(-0.2), true), tile(at(0.1), false), tile(at(0.3), true, 'loading')];
+			for (const t of tiles) inner.tiles.set(t.key, t);
+			inner.wanted = tiles.map((t) => t.key);
+			inner.looked = { cam, view };
+			return tt;
+		};
+		// ahead and in: wants one. Behind the camera: off screen. No mesh (no heights there), or not in yet: none asked
+		expect(make('http://o/{z}/{x}/{y}').stats).toMatchObject({ wanted: 4, orthoWanted: 1, ortho: 0, noOrtho: 0 });
+		expect(make().stats.orthoWanted).toBe(0);
+	});
+
 	it('a re-layout carries a built tile: its vertices land where the same tile built in the new frame has them', () => {
 		const a = new Frame(50.0875, 14.4214, 0), b = new Frame(50.0, 14.68, 0);     // ~20 km apart
 		const n = 65, z = 15, [x, y] = tileOf(50.05, 14.55, z);
