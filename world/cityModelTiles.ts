@@ -11,6 +11,7 @@ import { Frame, carryDir, carryPoint, rigid, type Vec3 } from './geodesy';
 import { localAxes } from './compass';
 import { pxPerRad, type View } from './terrainTiles';
 import { WorldRequests, RequestFailure, responseOrThrow } from './worldRequests';
+import { digestHex } from './sha256';
 
 export type CityAsset = { id: string; url: string; sha256: string; bytes: number; triangles: number;
 	anchor: Vec3; radius: number; node: string };
@@ -126,6 +127,15 @@ export function validateCityGlb(bytes: ArrayBuffer, asset: CityAsset) {
 	}
 }
 
+/** A downloaded mesh's checks before it is parsed: its GLB layout, then its bytes against the manifest's sha256. On
+ *  every origin: crypto.subtle is missing over plain http, where every mesh failed (digestHex). */
+export async function checkCityAsset(bytes: ArrayBuffer, asset: CityAsset) {
+	validateCityGlb(bytes, asset);
+	if (await digestHex(new Uint8Array(bytes)) !== asset.sha256) {
+		throw new RequestFailure('City-model asset checksum mismatch', false);
+	}
+}
+
 /** a mesh's group placed at its anchor in `frame`: east, up and south as its x, y and z (glTF's y-up) */
 export function placeAsset(group: THREE.Group, frame: Frame, anchor: Vec3): THREE.Group {
 	const position = frame.fromGeodetic(...anchor);
@@ -208,11 +218,7 @@ export class CityModelTiles {
 				run: async (signal: AbortSignal) => {
 					const response = await responseOrThrow(url, signal);
 					const bytes = await boundedBody(response, asset.bytes); signal.throwIfAborted();
-					validateCityGlb(bytes, asset);
-					const hash = await crypto.subtle.digest('SHA-256', bytes);
-					if ([...new Uint8Array(hash)].map(n => n.toString(16).padStart(2, '0')).join('') !== asset.sha256) {
-						throw new RequestFailure('City-model asset checksum mismatch', false);
-					}
+					await checkCityAsset(bytes, asset);
 					const gltf = await new GLTFLoader().parseAsync(bytes, '');
 					if (signal.aborted || this.disposed) { dispose(gltf.scene); signal.throwIfAborted(); return; }
 					const group = placeAsset(new THREE.Group(), this.o.frame, asset.anchor);
