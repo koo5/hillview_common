@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultLayers, readLayers } from './sceneLayers';
+import { defaultLayers, groundSources, readLayers } from './sceneLayers';
 
 describe('scene layers', () => {
 	it('starts on bare ground with every layer and the first atlas channel', () => {
@@ -29,6 +29,17 @@ describe('scene layers', () => {
 		expect(readLayers('{not json', ['prod'])).toEqual(defaultLayers(['prod']));
 		expect(readLayers(null, ['prod'])).toEqual(defaultLayers(['prod']));
 		expect(readLayers('7', ['prod'])).toEqual(defaultLayers(['prod']));
+	});
+
+	it('builds the ground from the photo\'s choice alone: hiding the terrain reads nothing again', () => {
+		const urls = { tileUrl: 'https://earth.example/t/1/terrain/bare/{z}/{x}/{y}.q16', orthoUrl: 'https://earth.example/t/2/ortho/{z}/{x}/{y}.jpg' };
+		// what it reads is what the scene's ground effect depends on: the photo's choice, never the terrain's visibility
+		const read = new Set<string | symbol>();
+		const watched = new Proxy({ ...defaultLayers(['prod']), terrainShown: false }, { get: (t, k) => { read.add(k); return Reflect.get(t, k); } });
+		expect(groundSources(watched, urls)).toEqual(urls);
+		expect([...read]).toEqual(['ortho']);
+		expect(groundSources({ ortho: false }, urls)).toEqual({ tileUrl: urls.tileUrl, orthoUrl: undefined });
+		expect(groundSources({ ortho: true }, null)).toEqual({ tileUrl: undefined, orthoUrl: undefined });
 	});
 
 	it('takes the host\'s budget until the viewer chooses one, and only a budget on offer', () => {

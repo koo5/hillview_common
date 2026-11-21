@@ -44,7 +44,7 @@
 	import type { AtlasCameras, AtlasCamerasTown } from './atlasCameras';
 	import { WorldRequests } from './worldRequests';
 	import { layerProgress, type LoadProgress } from './loadProgress';
-	import { readLayers, type SceneLayers } from './sceneLayers';
+	import { groundSources, readLayers, type SceneLayers } from './sceneLayers';
 	import WorldRequestPanel from './WorldRequestPanel.svelte';
 	import WorldSceneControls from './WorldSceneControls.svelte';
 
@@ -128,7 +128,7 @@
 	const EARTH_RETRY_MS = 30_000;
 	let earthRetry: ReturnType<typeof setTimeout> | 0 = 0;
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
-	/** the orthophoto drapes the terrain: with the terrain hidden it is not read */
+	/** the orthophoto drawn and credited: only on the terrain shown (it stays loaded while hidden: groundSources) */
 	const orthoShown = $derived(layers.ortho && layers.terrainShown && !!urls?.orthoUrl);
 	const modelsShown = $derived(layers.models && !!urls?.modelsUrl);
 	/** OpenStreetMap's layers from earth's vector tiles, each the viewer's own toggle: wherever they are, city models or
@@ -243,7 +243,7 @@
 	/** the ground, for this model and orthophoto: laid again whenever one of them changes; a re-layout of the frame
 	 * only moves it (ensureFrame, setFrame) */
 	$effect(() => {
-		const up = sceneUp, tileUrl = urls?.tileUrl, orthoUrl = orthoShown ? urls?.orthoUrl : undefined;
+		const up = sceneUp, { tileUrl, orthoUrl } = groundSources(layers, urls);
 		if (!up || !tileUrl) return;
 		untrack(() => {
 			terrain?.dispose();

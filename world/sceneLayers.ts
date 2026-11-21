@@ -42,6 +42,17 @@ export function defaultLayers(channels: readonly string[], atlasMiB: number = DE
 		atlas: channels[0] ?? null, atlasMiB, cameras: false, names: true, readout: false };
 }
 
+/**
+ * What the ground is built from: the terrain model's tiles and, when chosen, the aerial photo. The terrain's
+ * visibility is not read: hiding it only stops its drawing, where building the ground again would read every
+ * terrain tile again and leave the camera, the readout and OSM without heights until they are back. So the photo
+ * stays loaded while the terrain is hidden; it is neither drawn nor credited then.
+ */
+export function groundSources(layers: Pick<SceneLayers, 'ortho'>, urls: { tileUrl: string; orthoUrl?: string } | null):
+	{ tileUrl?: string; orthoUrl?: string } {
+	return { tileUrl: urls?.tileUrl, orthoUrl: layers.ortho ? urls?.orthoUrl : undefined };
+}
+
 /** `atlasMiB` is the host's default budget, for a viewer who has not chosen one */
 export function readLayers(saved: string | null, channels: readonly string[], atlasMiB: number = DEFAULT_WORLD_POINT_MIB): SceneLayers {
 	const d = defaultLayers(channels, atlasMiB);
