@@ -3,9 +3,11 @@
  * values, a feature's tags and its geometry commands. Enough for earth's OpenStreetMap tiles (its `osm` release:
  * building polygons, road and water lines, their OSM tags).
  *
- * mvtBuildings turns one tile's `building` layer into footprints in latitude and longitude. A tile carries every
- * building that touches it or its buffer whole, so a building near a tile's edge is in two or more tiles; each is kept
- * only by the tile that holds its centroid, which is the same answer in every tile.
+ * mvtOsm turns one tile into what the scene draws of it, in latitude and longitude: its `building` layer's footprints,
+ * its `road` layer's lines and its `water` layer's waterways and shores. A tile carries every building that touches it
+ * or its buffer whole, so a building near a tile's edge is in two or more tiles; each is kept only by the tile that
+ * holds its centroid, which is the same answer in every tile. A line is cut at the tile's own edge instead
+ * (clipToTile), so each metre of it is drawn by one tile.
  */
 
 export type MvtValue = string | number | boolean;
@@ -152,12 +154,21 @@ export function decodeMvt(bytes: Uint8Array): MvtLayer[] {
 	return layers;
 }
 
-/** one footprint: its OSM id, its ring closed, in latitude and longitude, and its height where OSM gives one */
-export type FlatBuilding = { id: number | undefined; ring: [number, number][]; height_m?: number;
-	height_source: 'height' | 'levels' | 'default' };
+/** one footprint: its OSM id, its outline and its courtyards (inner rings), each closed, in latitude and longitude, and
+ * its height: OSM's, else its floors at LEVEL_M, else DEFAULT_BUILDING_M (height_source says which) */
+export type FlatBuilding = { id: number | undefined; ring: [number, number][]; holes: [number, number][][];
+	height_m: number; height_source: 'height' | 'levels' | 'default' };
+
+/** a line in latitude and longitude: a road, a waterway, or a stretch of a lake's or river's shore */
+export type FlatLine = [number, number][];
+
+/** what the scene draws of one vector tile */
+export type OsmTile = { buildings: FlatBuilding[]; roads: FlatLine[]; water: FlatLine[] };
 
 /** a storey's height, for a building whose OSM tags give only `building:levels` */
 export const LEVEL_M = 3;
+/** a building whose OSM tags give neither a height nor floors: one storey (the operator, 2026-11-21) */
+export const DEFAULT_BUILDING_M = 3;
 
 const number = (v: MvtValue | undefined): number | null => {
 	if (typeof v === 'number') return Number.isFinite(v) ? v : null;
@@ -173,34 +184,103 @@ const area2 = (ring: [number, number][]) => {
 	return s;
 };
 
+/** tile units of a tile at z/x/y, extent `e`, to latitude and longitude */
+function degrees(z: number, x: number, y: number, e: number): (p: [number, number]) => [number, number] {
+	const n = 2 ** z;
+	return ([px, py]) => [(Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + py / e)) / n))) * 180) / Math.PI,
+		((x + px / e) / n) * 360 - 180];
+}
+
 /**
- * One tile's buildings (its `building` layer's polygons), each exterior ring its own footprint, holes left out: a
- * footprint is drawn as walls round its outline and a flat roof. Kept only where its centroid (the mean of its ring's
- * vertices, in tile units) lies in this tile, so a building in several tiles' buffers is drawn once.
+ * One tile's buildings (its `building` layer's polygons): each exterior ring a footprint, with the interior rings that
+ * follow it as its courtyards. A footprint is drawn as walls round its outline and round each courtyard, up to one
+ * roof height. Kept only where its centroid (the mean of its outline's vertices, in tile units) lies in this tile, so
+ * a building in several tiles' buffers is drawn once.
  */
 export function mvtBuildings(layers: MvtLayer[], z: number, x: number, y: number): FlatBuilding[] {
 	const layer = layers.find((l) => l.name === 'building');
 	if (!layer) return [];
-	const n = 2 ** z, e = layer.extent;
-	const lon = (px: number) => ((x + px / e) / n) * 360 - 180;
-	const lat = (py: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + py / e)) / n))) * 180) / Math.PI;
+	const e = layer.extent, at = degrees(z, x, y, e);
 	const out: FlatBuilding[] = [];
 	for (const f of layer.features) {
 		if (f.type !== 3) continue;
 		const h = number(f.tags.height), levels = number(f.tags['building:levels']);
 		const height = h !== null && h > 0 ? { height_m: h, height_source: 'height' as const }
 			: levels !== null && levels > 0 ? { height_m: levels * LEVEL_M, height_source: 'levels' as const }
-				: { height_source: 'default' as const };
+				: { height_m: DEFAULT_BUILDING_M, height_source: 'default' as const };
 		const id = typeof f.tags.osm_id === 'number' ? f.tags.osm_id : f.id;
+		// the building the interior rings that follow belong to; null while its outline is another tile's
+		let kept: FlatBuilding | null = null;
 		for (const ring of f.geometry) {
-			if (ring.length < 4 || area2(ring) <= 0) continue;
+			if (ring.length < 4) continue;
+			const a = area2(ring);
+			if (a < 0) {
+				kept?.holes.push(ring.map(at));
+				continue;
+			}
+			kept = null;
+			if (a === 0) continue;
 			// the ring is closed: its last vertex repeats the first, which the mean leaves out
 			let cx = 0, cy = 0;
 			for (let i = 0; i + 1 < ring.length; i++) { cx += ring[i][0]; cy += ring[i][1]; }
 			cx /= ring.length - 1; cy /= ring.length - 1;
 			if (cx < 0 || cx >= e || cy < 0 || cy >= e) continue;
-			out.push({ id, ring: ring.map(([px, py]) => [lat(py), lon(px)]), ...height });
+			kept = { id, ring: ring.map(at), holes: [], ...height };
+			out.push(kept);
 		}
 	}
 	return out;
+}
+
+/**
+ * A segment's part inside the tile's own square (Liang-Barsky), or null. Half-open, as tiles share their edges: a
+ * segment lying along the left or top edge is this tile's, one along the right or bottom edge the neighbour's.
+ */
+function clipSegment(p: [number, number], q: [number, number], e: number): [[number, number], [number, number]] | null {
+	const dx = q[0] - p[0], dy = q[1] - p[1];
+	let t0 = 0, t1 = 1;
+	for (const [k, d, strict] of [[-dx, p[0], false], [dx, e - p[0], true], [-dy, p[1], false], [dy, e - p[1], true]] as const) {
+		if (k === 0) {
+			if (d < 0 || (strict && d === 0)) return null;
+			continue;
+		}
+		const r = d / k;
+		if (k < 0) { if (r > t1) return null; if (r > t0) t0 = r; }
+		else { if (r < t0) return null; if (r < t1) t1 = r; }
+	}
+	if (t1 <= t0) return null;
+	return [[p[0] + t0 * dx, p[1] + t0 * dy], [p[0] + t1 * dx, p[1] + t1 * dy]];
+}
+
+/** a line's parts inside the tile's own square [0, e]^2, in tile units: cut where it leaves and enters again */
+export function clipToTile(line: [number, number][], e: number): [number, number][][] {
+	const out: [number, number][][] = [];
+	let cur: [number, number][] | null = null;
+	for (let i = 0; i + 1 < line.length; i++) {
+		const s = clipSegment(line[i], line[i + 1], e);
+		if (!s) { cur = null; continue; }
+		const last = cur?.[cur.length - 1];
+		if (cur && last && last[0] === s[0][0] && last[1] === s[0][1]) cur.push(s[1]);
+		else { cur = [s[0], s[1]]; out.push(cur); }
+	}
+	return out;
+}
+
+/** a layer's lines and every ring of its polygons (a shore), each cut to the tile's own square, in degrees */
+export function mvtLines(layers: MvtLayer[], name: string, z: number, x: number, y: number): FlatLine[] {
+	const layer = layers.find((l) => l.name === name);
+	if (!layer) return [];
+	const at = degrees(z, x, y, layer.extent);
+	const out: FlatLine[] = [];
+	for (const f of layer.features) {
+		if (f.type !== 2 && f.type !== 3) continue;
+		for (const part of f.geometry) for (const piece of clipToTile(part, layer.extent)) out.push(piece.map(at));
+	}
+	return out;
+}
+
+/** one tile, as the scene draws it: buildings, roads, water */
+export function mvtOsm(layers: MvtLayer[], z: number, x: number, y: number): OsmTile {
+	return { buildings: mvtBuildings(layers, z, x, y), roads: mvtLines(layers, 'road', z, x, y),
+		water: mvtLines(layers, 'water', z, x, y) };
 }

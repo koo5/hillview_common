@@ -67,10 +67,10 @@ export function layerUrls(earth: string, releases: Releases, model: TerrainModel
 }
 
 /** the credit lines for the layers drawn: the terrain's sources, then the orthophoto with its year (`orthoYear` null
- * while it is not drawn), IPR's buildings, and OpenStreetMap once while its names or its building footprints are */
+ * while it is not drawn), IPR's buildings, and OpenStreetMap once while its names or any of its tiles' layers are */
 export function credits(sources: Record<string, Source>,
-	shown: { orthoYear: string | null; models?: boolean; names?: boolean; footprints?: boolean }): Credit[] {
-	const { orthoYear, models = false, names = false, footprints = false } = shown;
+	shown: { orthoYear: string | null; models?: boolean; names?: boolean; osm?: boolean }): Credit[] {
+	const { orthoYear, models = false, names = false, osm = false } = shown;
 	const out: Credit[] = [];
 	const source = (key: string) => {
 		const s = sources[key];
@@ -90,7 +90,7 @@ export function credits(sources: Record<string, Source>,
 		// CC BY asks the changes said: earth's attribution names them (I3S to GLB, the heights' datum)
 		out.push({ text: s.text, url: s.url, licence: s.licence, terms_url: s.terms_url, changes: s.changes });
 	}
-	if (names || footprints) {
+	if (names || osm) {
 		const s = source('osm');
 		out.push({ text: s.text, url: s.url, licence: s.licence });
 	}

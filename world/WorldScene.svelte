@@ -10,7 +10,7 @@
 	 * moved view, a loaded tile, a resize.
 	 *
 	 * What is drawn is the viewer's choice (ea07, sceneLayers.ts): bare or surface ground, the orthophoto, IPR's
-	 * buildings, an atlas version or none, place names, chosen in WorldSceneControls and kept per viewer under
+	 * city models, OpenStreetMap's buildings, roads and water, an atlas version or none, place names, chosen in WorldSceneControls and kept per viewer under
 	 * `layersKey`. Every layer asks through one WorldRequests, which the loading overlay (WorldRequestPanel) reads.
 	 *
 	 * NAMES are the workbench's (labelPool.ts round the camera, worldNames.ts to draw them), from the channel's names
@@ -40,7 +40,7 @@
 	import { ViewGate, cameraView } from './view';
 	import { AtlasCloud, atlasCredits, loadAtlases, loadTowns, type AtlasVersion } from './atlasCloud';
 	import type { CityModelTiles } from './cityModelTiles';
-	import type { FootprintTiles, PlanCircle } from './footprintTiles';
+	import type { FootprintTiles, OsmKinds } from './footprintTiles';
 	import type { AtlasCameras, AtlasCamerasTown } from './atlasCameras';
 	import { WorldRequests } from './worldRequests';
 	import { layerProgress, type LoadProgress } from './loadProgress';
@@ -129,10 +129,11 @@
 	let earthRetry: ReturnType<typeof setTimeout> | 0 = 0;
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
 	const orthoShown = $derived(layers.ortho && !!urls?.orthoUrl);
-	const buildingsShown = $derived(layers.buildings && !!urls?.modelsUrl);
-	/** OpenStreetMap's building footprints, in the Buildings layer wherever the city models do not stand. Over the bare
-	 * ground only: the surface model already raises the buildings, and its height under a footprint is the roof */
-	const footprintsShown = $derived(layers.buildings && layers.terrain === 'bare' && !!urls?.osmUrl);
+	const modelsShown = $derived(layers.models && !!urls?.modelsUrl);
+	/** OpenStreetMap's layers from earth's vector tiles, each the viewer's own toggle: wherever they are, city models or
+	 * not, on whichever terrain is drawn (the operator, 2026-11-21: "let users toggle the layers") */
+	const osmKinds = $derived<OsmKinds>({ buildings: layers.osmBuildings, roads: layers.osmRoads, water: layers.osmWater });
+	const osmShown = $derived(!!urls?.osmUrl && (layers.osmBuildings || layers.osmRoads || layers.osmWater));
 	const namesShown = $derived(layers.names && !!urls?.namesUrl);
 	/** the atlas versions drawn, one per town: their licences and credits join the line */
 	let atlasVersions = $state.raw<AtlasVersion[]>([]);
@@ -141,8 +142,8 @@
 	/** the credit line names exactly the sources of what is drawn */
 	const credits = $derived.by((): Credit[] => {
 		if (!earth) return [];
-		const c = earthCredits(earth.sources, { orthoYear: orthoShown ? earth.orthoYear : null, models: buildingsShown,
-			names: namesShown, footprints: footprintsShown });
+		const c = earthCredits(earth.sources, { orthoYear: orthoShown ? earth.orthoYear : null, models: modelsShown,
+			names: namesShown, osm: osmShown });
 		return atlasVersions.length ? atlasCredits(c, atlasVersions) : c;
 	});
 	/** the atlas versions offered, labelled by their pointers; a channel whose pointer cannot be read is not offered */
@@ -254,7 +255,7 @@
 	/** IPR's buildings, while they are shown (their module only loads once they are); a re-layout only moves them */
 	let buildingsGeneration = 0;
 	$effect(() => {
-		const up = sceneUp, manifestUrl = buildingsShown ? urls?.modelsUrl : undefined;
+		const up = sceneUp, manifestUrl = modelsShown ? urls?.modelsUrl : undefined;
 		const generation = ++buildingsGeneration;
 		untrack(() => {
 			buildings?.dispose();
@@ -270,10 +271,10 @@
 		}).catch((e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
 	});
 
-	/** OpenStreetMap's footprints, while they are shown: earth's vector tiles, each building on the terrain drawn */
+	/** OpenStreetMap, while any of its layers is shown: earth's vector tiles, standing on the terrain drawn */
 	let footprintsGeneration = 0;
 	$effect(() => {
-		const up = sceneUp, tileUrl = footprintsShown ? urls?.osmUrl : undefined;
+		const up = sceneUp, tileUrl = osmShown ? urls?.osmUrl : undefined;
 		const generation = ++footprintsGeneration;
 		untrack(() => {
 			footprints?.dispose();
@@ -283,12 +284,21 @@
 		if (!up || !tileUrl) return;
 		import('./footprintTiles').then(({ FootprintTiles }) => {
 			if (destroyed || generation !== footprintsGeneration || !frame || !three) return;
-			footprints = new FootprintTiles(three, { format: 'mvt', tileUrl, frame, requests, maxTiles: 36,
+			footprints = new FootprintTiles(three, { format: 'mvt', tileUrl, frame, requests, maxTiles: 36, kinds: osmKinds,
 				ground: (lat, lon) => terrain?.groundAt(lat, lon) ?? null,
 				groundAt: (lat, lon) => terrain?.groundAt(lat, lon)?.h ?? null, onChange: changed });
 			scene!.add(footprints.group);
 			changed();
 		}).catch((e) => { error = `footprints: ${e instanceof Error ? e.message : String(e)}`; });
+	});
+	/** one of OpenStreetMap's layers toggled while another stays: the tiles read are built again, none fetched again */
+	$effect(() => {
+		const kinds = osmKinds;
+		untrack(() => {
+			if (!footprints) return;
+			footprints.setKinds(kinds);
+			changed();
+		});
 	});
 
 	/** the atlas's cameras, while they are shown: each open town's cameras.json, under its points' own matrix */
@@ -481,8 +491,6 @@
 	let footprintsAttr = $state('');
 	/** the atlas's cameras drawn, in how many towns (data-atlas-cameras, for checks) */
 	let camerasAttr = $state('');
-	/** where no city models stand: footprints everywhere (one array, so the footprints see no change) */
-	const NO_CITY_MODELS: PlanCircle[] = [];
 	/** Leave a shared absolute altitude at its current clearance, so a height gesture or flight starts there. */
 	function releaseSharedAltitude() {
 		if (sharedAltitude === null) return;
@@ -552,8 +560,6 @@
 			lastChange = performance.now();
 			terrain?.update(cam, v);
 			buildings?.update(cam, v);
-			// footprints stand where no city model does: they wait while the models' release is being read
-			footprints?.setHidden(buildingsShown ? buildings?.coverage ?? null : NO_CITY_MODELS);
 			footprints?.update(cam, v);
 			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
 		}
@@ -983,7 +989,7 @@
 			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
 	{#if !loading && !error}
-		<WorldSceneControls bind:layers {onstick} {flySpeed} onflyspeed={setFlySpeed} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!(urls?.modelsUrl || urls?.osmUrl)} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers {onstick} {flySpeed} onflyspeed={setFlySpeed} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} models={!!urls?.modelsUrl} osm={!!urls?.osmUrl} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if layers.readout && readout}

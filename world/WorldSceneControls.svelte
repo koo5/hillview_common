@@ -9,7 +9,7 @@
 	import { WORLD_POINT_BUDGETS } from './worldPointBudget';
 	import HeightStick from './HeightStick.svelte';
 
-	let { layers = $bindable(), onstick, onshare, flySpeed, onflyspeed, zoomKeys, ground, ortho, buildings, names, atlas, testid }: {
+	let { layers = $bindable(), onstick, onshare, flySpeed, onflyspeed, zoomKeys, ground, ortho, models, osm, names, atlas, testid }: {
 		layers: SceneLayers;
 		flySpeed: number;
 		onflyspeed: (speed: number) => void;
@@ -22,8 +22,10 @@
 		ground: boolean;
 		/** the channel has an orthophoto */
 		ortho: boolean;
-		/** the channel has buildings: city models, or OpenStreetMap footprints */
-		buildings: boolean;
+		/** the channel has IPR's city models */
+		models: boolean;
+		/** the channel has OpenStreetMap's vector tiles (buildings, roads, water) */
+		osm: boolean;
 		/** the channel has place names */
 		names: boolean;
 		/** the atlas versions offered, each with what its pointer says; empty without an atlas */
@@ -87,14 +89,19 @@
 					{/if}
 				</fieldset>
 			{/if}
-			{#if buildings || names}
+			{#if models || osm || names}
 				<fieldset>
 					<legend>On the ground</legend>
 					{#if names}
 						<label><input type="checkbox" bind:checked={layers.names} data-testid="{testid}-names-toggle" /> place names</label>
 					{/if}
-					{#if buildings}
-						<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" title="Prague's 3D city models where they stand; OpenStreetMap footprints elsewhere, over the bare ground" /> Buildings</label>
+					{#if models}
+						<label title="IPR Praha's 3D city models"><input type="checkbox" bind:checked={layers.models} data-testid="{testid}-models" /> city models</label>
+					{/if}
+					{#if osm}
+						<label title="outlines raised to their tagged height, else 3 m a floor, else 3 m"><input type="checkbox" bind:checked={layers.osmBuildings} data-testid="{testid}-osm-buildings" /> OSM buildings</label>
+						<label title="laid on the terrain"><input type="checkbox" bind:checked={layers.osmRoads} data-testid="{testid}-osm-roads" /> OSM roads</label>
+						<label title="rivers, streams and shores, laid on the terrain"><input type="checkbox" bind:checked={layers.osmWater} data-testid="{testid}-osm-water" /> OSM water</label>
 					{/if}
 				</fieldset>
 			{/if}

@@ -3,22 +3,24 @@ import { defaultLayers, readLayers } from './sceneLayers';
 
 describe('scene layers', () => {
 	it('starts on bare ground with every layer and the first atlas channel', () => {
-		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', ortho: true, buildings: true, atlas: 'prod', atlasMiB: 64, cameras: false, names: true,
-			readout: false });
+		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', ortho: true, models: true, osmBuildings: true, osmRoads: true, osmWater: true,
+			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
 		expect(defaultLayers([]).atlas).toBeNull();
 	});
 
 	it('keeps what was chosen', () => {
-		const chosen = { terrain: 'surface', ortho: false, buildings: false, atlas: 'beta', atlasMiB: 256, cameras: true, names: false,
-			readout: true };
+		const chosen = { terrain: 'surface', ortho: false, models: false, osmBuildings: true, osmRoads: false, osmWater: true,
+			atlas: 'beta', atlasMiB: 256, cameras: true, names: false, readout: true };
 		expect(readLayers(JSON.stringify(chosen), ['prod', 'beta'])).toEqual(chosen);
 		expect(readLayers(JSON.stringify({ ...chosen, atlas: null }), ['prod']).atlas).toBeNull();
 	});
 
 	it('falls back field by field: a channel no longer offered, a bad value, a broken or absent record', () => {
 		const r = readLayers(JSON.stringify({ terrain: 'dsm', ortho: false, atlas: 'gone' }), ['prod']);
-		expect(r).toEqual({ terrain: 'bare', ortho: false, buildings: true, atlas: 'prod', atlasMiB: 64, cameras: false, names: true,
-			readout: false });
+		expect(r).toEqual({ terrain: 'bare', ortho: false, models: true, osmBuildings: true, osmRoads: true, osmWater: true,
+			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
+		// the one Buildings layer of before (city models, else OSM) is no longer read: each layer on its own default
+		expect(readLayers(JSON.stringify({ buildings: false }), ['prod'])).toEqual(defaultLayers(['prod']));
 		// the cameras are off unless chosen, and a record from before they joined the layers keeps them off
 		expect(readLayers(JSON.stringify({ cameras: 'yes' }), ['prod']).cameras).toBe(false);
 		expect(readLayers('{not json', ['prod'])).toEqual(defaultLayers(['prod']));
