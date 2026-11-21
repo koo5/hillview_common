@@ -56,7 +56,8 @@ function patched(material: THREE_NS.PointsMaterial): Uniforms {
 	if (have) return have;
 	const u: Uniforms = { uNearPx: { value: 1 }, uFarPx: { value: 1 }, uKneeM: { value: 1 }, uByDistance: { value: 0 } };
 	material.userData.pointSizing = u;
-	const before = material.onBeforeCompile, prior = material.customProgramCacheKey();
+	// the patches before this one, kept as functions: a key that changes over time is followed, not frozen
+	const before = material.onBeforeCompile, prior = material.customProgramCacheKey.bind(material);
 	material.onBeforeCompile = (shader, renderer) => {
 		before.call(material, shader, renderer);
 		if (!shader.vertexShader.includes(SIZE_LINE)) throw new Error(`three changed its point shader: no "${SIZE_LINE}"`);
@@ -65,7 +66,7 @@ function patched(material: THREE_NS.PointsMaterial): Uniforms {
 			shader.vertexShader.replace(SIZE_LINE, 'gl_PointSize = uByDistance > 0.5\n' +
 				'\t\t? size * mix(uNearPx, uFarPx, smoothstep(0.0, uKneeM, length(mvPosition.xyz))) : size;');
 	};
-	material.customProgramCacheKey = () => `${prior}+point-sizing`;
+	material.customProgramCacheKey = () => `${prior()}+point-sizing`;
 	material.needsUpdate = true;
 	return u;
 }

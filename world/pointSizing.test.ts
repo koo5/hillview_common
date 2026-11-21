@@ -65,6 +65,16 @@ describe('point size by distance', () => {
 		expect(shader.vertexShader.split('uByDistance > 0.5').length).toBe(2);
 	});
 
+	test("the program key follows an earlier patch's key as it changes, its own part after it", () => {
+		const m = new THREE.PointsMaterial();
+		let variant = 'a';
+		m.customProgramCacheKey = () => `filters-${variant}`;
+		sizeByDistance(m, initialPointSizing());
+		expect(m.customProgramCacheKey()).toBe('filters-a+point-sizing');
+		variant = 'b';
+		expect(m.customProgramCacheKey()).toBe('filters-b+point-sizing');
+	});
+
 	test('refused: a curve or a size that is none, leaving the material as it was', () => {
 		const m = srgbPointsMaterial(THREE);
 		sizeByDistance(m, initialPointSizing());
