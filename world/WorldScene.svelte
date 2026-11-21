@@ -314,6 +314,16 @@
 		});
 	});
 
+	/** the atlas's point sizing chosen: set on the open cloud, which reads nothing again */
+	$effect(() => {
+		const { nearPx, farPx, kneeM } = layers.atlasSizing;
+		untrack(() => {
+			if (!atlas) return;
+			atlas.setPointSizing({ nearPx, farPx, kneeM });
+			draw();
+		});
+	});
+
 	/** the atlas's cameras, while they are shown: each open town's cameras.json, under its points' own matrix */
 	let atlasCameras: AtlasCameras | null = null;
 	let camerasGeneration = 0;
@@ -899,7 +909,8 @@
 			if (!loaded.length) throw new Error(said);
 			// every town in one cloud and one budget (AtlasCloud), each from its own town's origin
 			const cloud = new AtlasCloud(three, { towns: loaded.map((a) => ({ label: a.entry.town.label, treeUrl: a.treeUrl,
-				frame: new Frame(...a.version.origin) })), scene: frame, requests, budgetMiB: mib, onChange: () => draw() });
+				frame: new Frame(...a.version.origin) })), scene: frame, requests, budgetMiB: mib,
+				sizing: untrack(() => ({ ...layers.atlasSizing })), onChange: () => draw() });
 			try {
 				await cloud.open();
 			} catch (e) {
@@ -907,8 +918,9 @@
 				throw new Error([said, e instanceof Error ? e.message : String(e)].filter(Boolean).join('; '));
 			}
 			if (destroyed || generation !== atlasGeneration) { cloud.dispose(); return; }
-			// a re-layout during the open went by while atlas was null: place the cloud in today's frame
+			// a re-layout or a point sizing chosen during the open went by while atlas was null: today's, then
 			cloud.setScene(frame!);
+			cloud.setPointSizing({ ...layers.atlasSizing });
 			atlas = cloud;
 			atlasFailed = said || null;
 			const open = new Set(cloud.openTowns);

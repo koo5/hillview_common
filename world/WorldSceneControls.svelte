@@ -7,6 +7,7 @@
 	import type { SceneLayers } from './sceneLayers';
 	import { FLY_LAYOUTS, MIN_FLY_MPS, MAX_FLY_MPS } from './flight';
 	import { WORLD_POINT_BUDGETS } from './worldPointBudget';
+	import { POINT_SIZING } from './pointSizing';
 	import HeightStick from './HeightStick.svelte';
 
 	let { layers = $bindable(), onstick, onshare, flySpeed, onflyspeed, zoomKeys, ground, ortho, models, osm, names, atlas, testid }: {
@@ -134,6 +135,22 @@
 									<option value={mib}>{mib} MiB</option>
 								{/each}
 							</select>
+						</label>
+						<!-- each point's size on screen by its distance: `near` by the eye, rising to `far` at `far from` -->
+						<label title="points by the eye, on screen">
+							near <input type="range" min={POINT_SIZING.nearPx.min} max={POINT_SIZING.nearPx.max} step={POINT_SIZING.nearPx.step}
+								bind:value={layers.atlasSizing.nearPx} data-testid="{testid}-atlas-near-px" /> {layers.atlasSizing.nearPx} px
+						</label>
+						<label title="points from 'far from' on, on screen">
+							far <input type="range" min={POINT_SIZING.farPx.min} max={POINT_SIZING.farPx.max} step={POINT_SIZING.farPx.step}
+								bind:value={layers.atlasSizing.farPx} data-testid="{testid}-atlas-far-px" /> {layers.atlasSizing.farPx} px
+						</label>
+						<label title="the distance at which points reach the far size">
+							far from <input type="number" min={POINT_SIZING.kneeM.min} max={POINT_SIZING.kneeM.max} step={POINT_SIZING.kneeM.step}
+								value={layers.atlasSizing.kneeM} data-testid="{testid}-atlas-knee-m"
+								onchange={(e) => { const v = e.currentTarget.valueAsNumber;
+									if (v >= POINT_SIZING.kneeM.min && v <= POINT_SIZING.kneeM.max) layers.atlasSizing.kneeM = v;
+									else e.currentTarget.value = String(layers.atlasSizing.kneeM); }} /> m
 						</label>
 						<label title="where each photograph was taken and which way it looked, a colour per solve">
 							<input type="checkbox" bind:checked={layers.cameras} data-testid="{testid}-atlas-cameras" /> cameras

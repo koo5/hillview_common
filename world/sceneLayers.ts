@@ -7,6 +7,7 @@
  */
 import type { TerrainModel } from './earth';
 import { DEFAULT_WORLD_POINT_MIB, WORLD_POINT_BUDGETS } from './worldPointBudget';
+import { initialPointSizing, readPointSizing, type PointSizing } from './pointSizing';
 
 export type SceneLayers = {
 	/** the terrain model: the ground everything stands on, drawn or not */
@@ -26,6 +27,8 @@ export type SceneLayers = {
 	/** the atlas's point budget, MiB, one of WORLD_POINT_BUDGETS (2026-11-05): a view preference, as the
 	 * budget's own module says — a phone wants less, a workstation can hold more */
 	atlasMiB: number;
+	/** the atlas's points on screen by their distance: small near, larger far (pointSizing.ts; the operator, 2026-11-21) */
+	atlasSizing: PointSizing;
 	/** the atlas's cameras: every photograph's pose in its town, a colour per solve (off unless chosen) */
 	cameras: boolean;
 	/** place names (peaks, towers, places) over the scene */
@@ -39,7 +42,7 @@ export type SceneLayers = {
 export function defaultLayers(channels: readonly string[], atlasMiB: number = DEFAULT_WORLD_POINT_MIB): SceneLayers {
 	return { terrain: 'bare', terrainShown: true, ortho: true, models: true, osmBuildings: true, osmRoads: true, osmWalls: true,
 		osmWater: true,
-		atlas: channels[0] ?? null, atlasMiB, cameras: false, names: true, readout: false };
+		atlas: channels[0] ?? null, atlasMiB, atlasSizing: initialPointSizing(), cameras: false, names: true, readout: false };
 }
 
 /**
@@ -74,6 +77,7 @@ export function readLayers(saved: string | null, channels: readonly string[], at
 		osmWater: typeof v.osmWater === 'boolean' ? v.osmWater : d.osmWater,
 		atlas: v.atlas === null || (typeof v.atlas === 'string' && channels.includes(v.atlas)) ? v.atlas : d.atlas,
 		atlasMiB: (WORLD_POINT_BUDGETS as readonly unknown[]).includes(v.atlasMiB) ? (v.atlasMiB as number) : d.atlasMiB,
+		atlasSizing: readPointSizing(v.atlasSizing),
 		cameras: typeof v.cameras === 'boolean' ? v.cameras : d.cameras,
 		names: typeof v.names === 'boolean' ? v.names : d.names,
 		readout: typeof v.readout === 'boolean' ? v.readout : d.readout

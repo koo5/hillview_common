@@ -16,6 +16,7 @@ import { CopcSource } from './copcSource';
 import type { Credit } from './earth';
 import { readBlocks } from './copcBlocks';
 import { BLOCK_UPLOAD_BYTES, BlockCloud, srgbPointsMaterial } from './blockCloud';
+import { initialPointSizing, sizeByDistance, type PointSizing } from './pointSizing';
 import { Frame, rigid } from './geodesy';
 import type { WorldRequests } from './worldRequests';
 import { WorldResidency } from './worldResidency';
@@ -149,16 +150,24 @@ export class AtlasCloud {
 	private disposed = false;
 	private pumpError: string | null = null;
 
+	/** every town's points sized by `sizing`: the one material's uniforms, nothing read or uploaded again */
+	setPointSizing(sizing: PointSizing) {
+		sizeByDistance(this.material, sizing);
+	}
+
 	constructor(private THREE: Three, private o: {
 		towns: AtlasCloudTown[]; scene: Frame; requests: WorldRequests;
-		budgetMiB?: number; pointPx?: number; onChange?: () => void;
+		budgetMiB?: number;
+		/** each point's size by its distance (pointSizing.ts); initialPointSizing() unless given */
+		sizing?: PointSizing; onChange?: () => void;
 	}) {
 		if (!o.towns.length) throw new Error('an atlas cloud draws at least one town');
 		const bytes = (o.budgetMiB ?? 64) * 1024 * 1024;
 		this.residency = new WorldResidency(bytes, bytes);
 		this.scope = o.requests.scope('atlas points');
 		// EACH BLOCK UPLOADED ONCE (ea14 A-1); the frame's upload cap is the towns' together
-		this.material = srgbPointsMaterial(THREE, { size: o.pointPx ?? 2, sizeAttenuation: false });
+		this.material = srgbPointsMaterial(THREE);
+		sizeByDistance(this.material, o.sizing ?? initialPointSizing());
 		this.object = new THREE.Group();
 		const uploadBytes = Math.floor(BLOCK_UPLOAD_BYTES / o.towns.length);
 		this.towns = o.towns.map((t, index) => {

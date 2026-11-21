@@ -169,6 +169,43 @@ describe('AtlasCloud: every town from one budget', () => {
 		cloud.dispose();
 	});
 
+	it('a point sizing reaches every town\'s points at once, and nothing is read again', async () => {
+		let loads = 0;
+		vi.spyOn(CopcSource, 'open').mockImplementation(async (url: string) => {
+			const f = fake(url) as unknown as { load: (n: CopcNode) => Promise<CopcChunk> };
+			const load = f.load;
+			f.load = (n) => { loads++; return load(n); };
+			return f as unknown as CopcSource;
+		});
+		const cloud = new AtlasCloud(THREE, { towns: [
+			{ label: 'Brandýs nad Labem', treeUrl: 'b', frame: BRANDYS_AT },
+			{ label: 'Sadská', treeUrl: 's', frame: SADSKA_AT }
+		], scene: BRANDYS_AT, requests: new WorldRequests(), budgetMiB: 1, sizing: { nearPx: 2, farPx: 5, kneeM: 60 } });
+		await cloud.open();
+		cloud.update(camera(), 600, false);
+		await settle(cloud);
+		// every drawn block shares the one material and so its curve
+		const curves = () => {
+			const out = new Set<string>();
+			cloud.object.traverse((o) => {
+				if (!(o instanceof THREE.Points)) return;
+				const u = (o.material as THREE.PointsMaterial).userData.pointSizing;
+				out.add(`${u.uNearPx.value}/${u.uFarPx.value}/${u.uKneeM.value}`);
+			});
+			return [...out];
+		};
+		expect(curves()).toEqual(['2/5/60']);
+		const read = loads;
+		expect(read).toBeGreaterThan(0);
+		cloud.setPointSizing({ nearPx: 1, farPx: 4, kneeM: 150 });
+		expect(curves()).toEqual(['1/4/150']);
+		cloud.update(camera(), 600, false);
+		await settle(cloud);
+		expect(loads).toBe(read);
+		expect(() => cloud.setPointSizing({ nearPx: 0, farPx: 4, kneeM: 150 })).toThrow('points: a nearPx');
+		cloud.dispose();
+	});
+
 	it('a town whose tree does not open is said, and the others draw', async () => {
 		vi.spyOn(CopcSource, 'open').mockImplementation(async (url: string) => {
 			if (url === 's') throw new Error('406 for s');

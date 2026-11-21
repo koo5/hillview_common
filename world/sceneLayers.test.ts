@@ -5,14 +5,16 @@ describe('scene layers', () => {
 	it('starts on bare ground with every layer and the first atlas channel', () => {
 		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', terrainShown: true, ortho: true, models: true,
 			osmBuildings: true, osmRoads: true, osmWalls: true, osmWater: true,
-			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
+			atlas: 'prod', atlasMiB: 64, atlasSizing: { nearPx: 1.5, farPx: 4, kneeM: 100 }, cameras: false, names: true,
+			readout: false });
 		expect(defaultLayers([]).atlas).toBeNull();
 	});
 
 	it('keeps what was chosen', () => {
 		const chosen = { terrain: 'surface', terrainShown: false, ortho: false, models: false, osmBuildings: true, osmRoads: false,
 			osmWalls: false, osmWater: true,
-			atlas: 'beta', atlasMiB: 256, cameras: true, names: false, readout: true };
+			atlas: 'beta', atlasMiB: 256, atlasSizing: { nearPx: 1, farPx: 6, kneeM: 250 }, cameras: true, names: false,
+			readout: true };
 		expect(readLayers(JSON.stringify(chosen), ['prod', 'beta'])).toEqual(chosen);
 		expect(readLayers(JSON.stringify({ ...chosen, atlas: null }), ['prod']).atlas).toBeNull();
 	});
@@ -21,7 +23,11 @@ describe('scene layers', () => {
 		const r = readLayers(JSON.stringify({ terrain: 'dsm', ortho: false, atlas: 'gone' }), ['prod']);
 		expect(r).toEqual({ terrain: 'bare', terrainShown: true, ortho: false, models: true, osmBuildings: true, osmRoads: true,
 			osmWalls: true, osmWater: true,
-			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
+			atlas: 'prod', atlasMiB: 64, atlasSizing: { nearPx: 1.5, farPx: 4, kneeM: 100 }, cameras: false, names: true,
+			readout: false });
+		// a sizing read field by field: a value off its range takes its own initial one
+		expect(readLayers(JSON.stringify({ atlasSizing: { nearPx: 99, farPx: 8, kneeM: '7' } }), ['prod']).atlasSizing)
+			.toEqual({ nearPx: 1.5, farPx: 8, kneeM: 100 });
 		// the one Buildings layer of before (city models, else OSM) is no longer read: each layer on its own default
 		expect(readLayers(JSON.stringify({ buildings: false }), ['prod'])).toEqual(defaultLayers(['prod']));
 		// the cameras are off unless chosen, and a record from before they joined the layers keeps them off
