@@ -136,7 +136,7 @@
 								{/each}
 							</select>
 						</label>
-						<!-- each point's size on screen by its distance: `near` by the eye, rising to `far` at `far from` -->
+						<!-- each point's size on screen by its distance: `near` by the eye, going to `far` at `far from` -->
 						<label title="points by the eye, on screen">
 							near <input type="range" min={POINT_SIZING.nearPx.min} max={POINT_SIZING.nearPx.max} step={POINT_SIZING.nearPx.step}
 								bind:value={layers.atlasSizing.nearPx} data-testid="{testid}-atlas-near-px" /> {layers.atlasSizing.nearPx} px

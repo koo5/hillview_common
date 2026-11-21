@@ -27,7 +27,8 @@ export type SceneLayers = {
 	/** the atlas's point budget, MiB, one of WORLD_POINT_BUDGETS (2026-11-05): a view preference, as the
 	 * budget's own module says — a phone wants less, a workstation can hold more */
 	atlasMiB: number;
-	/** the atlas's points on screen by their distance: small near, larger far (pointSizing.ts; the operator, 2026-11-21) */
+	/** the atlas's points on screen by their distance: a near size by the eye, a far size from a distance on
+	 * (pointSizing.ts; the operator, 2026-11-21) */
 	atlasSizing: PointSizing;
 	/** the atlas's cameras: every photograph's pose in its town, a colour per solve (off unless chosen) */
 	cameras: boolean;

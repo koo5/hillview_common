@@ -1,8 +1,7 @@
 /**
- * A point's size by its distance from the eye (the operator, 2026-11-21: far points "at least 4px when far, then make
- * them smaller as they approach"; "we will experiment"). On screen a point is `nearPx` at the eye, rising smoothly to
- * `farPx` at `kneeM` and `farPx` beyond, in CSS px. Near, where a cloud is densest, its points stay small and its
- * detail crisp; far, where only its coarse levels are held, they stay large enough to fill the gaps between them.
+ * A point's size by its distance from the eye (the operator, 2026-11-21: "keep at least 4px when far, then make them
+ * smaller as they approach"; "we will experiment"). On screen a point is `nearPx` at the eye, going smoothly to `farPx`
+ * at `kneeM` and `farPx` beyond, in CSS px: up or down, as the two are set.
  *
  * sizeByDistance puts the curve into a three PointsMaterial's own shader, so every viewer's points can take it; a new
  * curve changes its uniforms only. sizeInMetres turns the same material back to a size in metres (three's own rule,

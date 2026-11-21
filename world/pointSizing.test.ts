@@ -86,7 +86,8 @@ describe('point size by distance', () => {
 
 	test('a saved curve is read field by field: one off its range takes its initial value, the others stay', () => {
 		expect(readPointSizing({ nearPx: 2, farPx: 6, kneeM: 50 })).toEqual({ nearPx: 2, farPx: 6, kneeM: 50 });
-		expect(readPointSizing({ nearPx: 0.1, farPx: 6, kneeM: 1e5 })).toEqual({ nearPx: 1.5, farPx: 6, kneeM: 100 });
+		expect(readPointSizing({ nearPx: 0.1, farPx: 6, kneeM: 1e5 }))
+			.toEqual({ nearPx: POINT_SIZING.nearPx.initial, farPx: 6, kneeM: POINT_SIZING.kneeM.initial });
 		for (const v of [null, 'x', 7, {}]) expect(readPointSizing(v)).toEqual(initialPointSizing());
 	});
 });

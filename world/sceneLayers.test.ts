@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { defaultLayers, groundSources, readLayers } from './sceneLayers';
+import { POINT_SIZING, initialPointSizing } from './pointSizing';
 
 describe('scene layers', () => {
 	it('starts on bare ground with every layer and the first atlas channel', () => {
 		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', terrainShown: true, ortho: true, models: true,
 			osmBuildings: true, osmRoads: true, osmWalls: true, osmWater: true,
-			atlas: 'prod', atlasMiB: 64, atlasSizing: { nearPx: 1.5, farPx: 4, kneeM: 100 }, cameras: false, names: true,
+			atlas: 'prod', atlasMiB: 64, atlasSizing: initialPointSizing(), cameras: false, names: true,
 			readout: false });
 		expect(defaultLayers([]).atlas).toBeNull();
 	});
@@ -23,11 +24,11 @@ describe('scene layers', () => {
 		const r = readLayers(JSON.stringify({ terrain: 'dsm', ortho: false, atlas: 'gone' }), ['prod']);
 		expect(r).toEqual({ terrain: 'bare', terrainShown: true, ortho: false, models: true, osmBuildings: true, osmRoads: true,
 			osmWalls: true, osmWater: true,
-			atlas: 'prod', atlasMiB: 64, atlasSizing: { nearPx: 1.5, farPx: 4, kneeM: 100 }, cameras: false, names: true,
+			atlas: 'prod', atlasMiB: 64, atlasSizing: initialPointSizing(), cameras: false, names: true,
 			readout: false });
 		// a sizing read field by field: a value off its range takes its own initial one
 		expect(readLayers(JSON.stringify({ atlasSizing: { nearPx: 99, farPx: 8, kneeM: '7' } }), ['prod']).atlasSizing)
-			.toEqual({ nearPx: 1.5, farPx: 8, kneeM: 100 });
+			.toEqual({ nearPx: POINT_SIZING.nearPx.initial, farPx: 8, kneeM: POINT_SIZING.kneeM.initial });
 		// the one Buildings layer of before (city models, else OSM) is no longer read: each layer on its own default
 		expect(readLayers(JSON.stringify({ buildings: false }), ['prod'])).toEqual(defaultLayers(['prod']));
 		// the cameras are off unless chosen, and a record from before they joined the layers keeps them off
