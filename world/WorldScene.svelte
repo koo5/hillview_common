@@ -41,6 +41,7 @@
 	import { AtlasCloud, atlasCredits, loadAtlases, loadTowns, type AtlasVersion } from './atlasCloud';
 	import type { CityModelTiles } from './cityModelTiles';
 	import type { FootprintTiles, PlanCircle } from './footprintTiles';
+	import type { AtlasCameras, AtlasCamerasTown } from './atlasCameras';
 	import { WorldRequests } from './worldRequests';
 	import { layerProgress, type LoadProgress } from './loadProgress';
 	import { readLayers, type SceneLayers } from './sceneLayers';
@@ -135,6 +136,8 @@
 	const namesShown = $derived(layers.names && !!urls?.namesUrl);
 	/** the atlas versions drawn, one per town: their licences and credits join the line */
 	let atlasVersions = $state.raw<AtlasVersion[]>([]);
+	/** the open towns' cameras.json and frames (the cameras layer) */
+	let atlasTowns = $state.raw<AtlasCamerasTown[]>([]);
 	/** the credit line names exactly the sources of what is drawn */
 	const credits = $derived.by((): Credit[] => {
 		if (!earth) return [];
@@ -224,6 +227,7 @@
 		terrain?.setFrame(next);
 		buildings?.setFrame(next);
 		footprints?.setFrame(next);
+		atlasCameras?.setScene(next);
 		labelPool?.setFrame(next);
 	}
 
@@ -285,6 +289,26 @@
 			scene!.add(footprints.group);
 			changed();
 		}).catch((e) => { error = `footprints: ${e instanceof Error ? e.message : String(e)}`; });
+	});
+
+	/** the atlas's cameras, while they are shown: each open town's cameras.json, under its points' own matrix */
+	let atlasCameras: AtlasCameras | null = null;
+	let camerasGeneration = 0;
+	$effect(() => {
+		const up = sceneUp, towns = layers.cameras && layers.atlas !== null ? atlasTowns : [];
+		const generation = ++camerasGeneration;
+		untrack(() => {
+			atlasCameras?.dispose();
+			atlasCameras = null;
+			draw();
+		});
+		if (!up || !towns.length) return;
+		import('./atlasCameras').then(({ AtlasCameras }) => {
+			if (destroyed || generation !== camerasGeneration || !frame || !three) return;
+			atlasCameras = new AtlasCameras(three, { towns, scene: frame, requests, onChange: changed });
+			scene!.add(atlasCameras.object);
+			changed();
+		}).catch((e) => { error = `cameras: ${e instanceof Error ? e.message : String(e)}`; });
 	});
 
 	// ---- flight ----
@@ -455,6 +479,8 @@
 	let buildingsAttr = $state('');
 	/** the footprint tiles standing / wanted (data-footprints, for checks) */
 	let footprintsAttr = $state('');
+	/** the atlas's cameras drawn, in how many towns (data-atlas-cameras, for checks) */
+	let camerasAttr = $state('');
 	/** where no city models stand: footprints everywhere (one array, so the footprints see no change) */
 	const NO_CITY_MODELS: PlanCircle[] = [];
 	/** Leave a shared absolute altitude at its current clearance, so a height gesture or flight starts there. */
@@ -559,10 +585,12 @@
 			const f = footprints.stats;
 			footprintsAttr = `${f.ready}/${f.wanted}${f.failed ? ` failed ${f.failed}` : ''}`;
 		} else footprintsAttr = '';
+		const cams = atlasCameras?.stats;
+		camerasAttr = cams ? `${cams.cameras} in ${cams.towns} towns${cams.loading ? ', loading' : ''}` : '';
 		if (atlas) {
 			const a = atlas.summary;
 			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
-			const errors = [atlasFailed, atlas.error].filter((e): e is string => e !== null);
+			const errors = [atlasFailed, atlas.error, ...(cams?.errors ?? [])].filter((e): e is string => e !== null);
 			atlasError = errors.length ? `atlas: ${errors.join('; ')}` : null;
 		}
 		lastAsk = ask;
@@ -576,7 +604,7 @@
 		const st = terrain?.stats;
 		if (!st) return;
 		settled = st.wanted > 0 && st.loading === 0 && lastAsk !== 'soon' && atlasOpened !== 'opening' &&
-			(!atlas || (atlas.idle && !atlas.error && !atlasFailed)) && (!buildings || buildings.settled) && (!footprints || footprints.settled) && !labelPool?.stats.loading &&
+			(!atlas || (atlas.idle && !atlas.error && !atlasFailed)) && (!buildings || buildings.settled) && (!footprints || footprints.settled) && (!atlasCameras || atlasCameras.settled) && !labelPool?.stats.loading &&
 			(!labelPool || !worldNames?.judging || worldNames.judgedAt >= lastChange);
 	}
 
@@ -837,6 +865,7 @@
 		atlas = null;
 		atlasFailed = null;
 		atlasVersions = [];
+		atlasTowns = [];
 		atlasState = '';
 		atlasError = null;
 		atlasOpened = 'none';
@@ -865,6 +894,8 @@
 			atlasFailed = said || null;
 			const open = new Set(cloud.openTowns);
 			atlasVersions = loaded.filter((_, i) => open.has(i)).map((a) => a.version);
+			atlasTowns = loaded.filter((_, i) => open.has(i)).map((a) => ({ label: a.entry.town.label, camerasUrl: a.camerasUrl,
+				frame: new Frame(...a.version.origin) }));
 			scene.add(cloud.object);
 			atlasOpened = 'open';
 			changed();
@@ -891,6 +922,7 @@
 		atlas?.dispose();
 		buildings?.dispose();
 		footprints?.dispose();
+		atlasCameras?.dispose();
 		labelPool?.dispose();
 		worldNames?.dispose();
 		depthTarget?.dispose();
@@ -935,6 +967,7 @@
 	data-pitch={pitch.toFixed(2)}
 	data-buildings={buildingsAttr}
 	data-footprints={footprintsAttr}
+	data-atlas-cameras={camerasAttr}
 	data-frame={frame ? `${frame.lat.toFixed(4)},${frame.lon.toFixed(4)}` : ''}
 	data-fly-speed={flySpeed.toFixed(1)}
 	role="application"

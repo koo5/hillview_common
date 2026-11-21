@@ -126,6 +126,9 @@
 								{/each}
 							</select>
 						</label>
+						<label title="where each photograph was taken and which way it looked, a colour per solve">
+							<input type="checkbox" bind:checked={layers.cameras} data-testid="{testid}-atlas-cameras" /> cameras
+						</label>
 					{/if}
 				</fieldset>
 			{/if}
