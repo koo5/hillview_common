@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three';
-import { CONE_VERTICES, CameraFrusta, oklab, solveTint, type Cone, type Rot, type Vec3 } from './cameraFrusta';
+import { CONE_VERTICES, CameraFrusta, KEEP_OFF, RESERVED_TINTS, oklab, solveTint, type Cone, type Rot, type Vec3 } from './cameraFrusta';
 
 // a camera turned about two axes, so a mixed-up row or column would show
 function rotation(yaw: number, pitch: number): Rot {
@@ -112,7 +112,15 @@ describe('a tint per solve', () => {
 			if (d < min) { min = d; at = [i, j]; }
 		}
 		// golden-angle hues alone put solves 0 and 34 3.4 degrees apart: 0.011 here
-		expect(min, `solves ${at}`).toBeGreaterThan(0.05);
+		expect(min, `solves ${at}`).toBeGreaterThan(0.045);
+	});
+
+	test('no solve looks like the edge green, the highlight or the injected amber', () => {
+		const reserved = RESERVED_TINTS.map(oklab);
+		for (let i = 0; i < 100; i++) {
+			const l = oklab(solveTint(i));
+			for (const r of reserved) expect(Math.hypot(l[0] - r[0], l[1] - r[1], l[2] - r[2]), `solve ${i}`).toBeGreaterThanOrEqual(KEEP_OFF);
+		}
 	});
 
 	test('a solve keeps its colour however many solves follow it, and an index that is none is refused', () => {

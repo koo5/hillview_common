@@ -154,22 +154,33 @@ const LEVELS = [0.45, 0.58, 0.71];
 const HUE_STEP = 3;
 /** the first solve's colour: the blue a run's own cameras have always had */
 const FIRST = { h: 210, l: 0.58 };
+/** colours no solve should look like, counted as if taken before the first: the cones' green bottom edge (their
+ * orientation cue), the workbench's highlight yellow and an injected photograph's amber */
+export const RESERVED_TINTS = [(Math.round(GREEN[0] * 255) << 16) | (Math.round(GREEN[1] * 255) << 8) | Math.round(GREEN[2] * 255),
+	0xffd54f, 0xe0a23a];
+/** how far in OKLab every solve's colour stays from each reserved one */
+export const KEEP_OFF = 0.12;
 
 type Candidate = { h: number; l: number; rgb: number; lab: [number, number, number] };
 let candidates: Candidate[] | null = null;
-/** the candidate each solve took, in order; and each candidate's distance to the nearest colour taken */
+/** the candidate each solve took, in order; and each candidate's distance to the nearest colour taken or reserved */
 const taken: number[] = [];
 let nearest: number[] = [];
 
 /**
  * The tint of solve `i` (0-based). Each solve takes, of the candidate colours (the hues outside SKIP at three
- * lightnesses), the one farthest in OKLab from every colour the solves before it took: so any number of solves are
- * spread as far apart as the candidates allow, and a solve's colour never depends on how many come after it.
- * Golden-angle hues alone come back within a few degrees at Fibonacci distances (solves 0 and 34, 3.4 degrees).
+ * lightnesses), the one farthest in OKLab from every colour the solves before it took and from RESERVED_TINTS: so any
+ * number of solves are spread as far apart as the candidates allow, none crowds the colours the cameras already use,
+ * and a solve's colour never depends on how many come after it. Golden-angle hues alone come back within a few degrees
+ * at Fibonacci distances (solves 0 and 34, 3.4 degrees).
  */
 export function solveTint(i: number): number {
 	if (!Number.isInteger(i) || i < 0) throw new Error(`solveTint: ${i} is not a solve index`);
 	const c = (candidates ??= makeCandidates());
+	if (!nearest.length) {
+		const reserved = RESERVED_TINTS.map(oklab);
+		nearest = c.map((x) => Math.min(...reserved.map((r) => labDistance(x.lab, r))));
+	}
 	while (taken.length <= i) {
 		let k: number;
 		if (taken.length >= c.length) k = taken[taken.length - c.length];    // every candidate taken: they repeat in order
@@ -179,19 +190,22 @@ export function solveTint(i: number): number {
 			for (let j = 1; j < c.length; j++) if (nearest[j] > nearest[k]) k = j;
 		}
 		const at = c[k].lab;
-		nearest = taken.length ? nearest.map((d, j) => Math.min(d, labDistance(c[j].lab, at))) : c.map((x) => labDistance(x.lab, at));
+		nearest = nearest.map((d, j) => Math.min(d, labDistance(c[j].lab, at)));
 		taken.push(k);
 	}
 	return c[taken[i]].rgb;
 }
 
 function makeCandidates(): Candidate[] {
+	const reserved = RESERVED_TINTS.map(oklab);
 	const out: Candidate[] = [];
 	for (const l of LEVELS)
 		for (let h = 0; h < 360; h += HUE_STEP) {
 			if (SKIP.some(([a, b]) => h >= a && h < b)) continue;
-			const rgb = hsl(h, 0.8, l);
-			out.push({ h, l, rgb, lab: oklab(rgb) });
+			const rgb = hsl(h, 0.8, l), lab = oklab(rgb);
+			// a colour this near a reserved one is never offered (the hue bands alone left yellow-greens 0.058 from the edge green)
+			if (reserved.some((r) => labDistance(lab, r) < KEEP_OFF)) continue;
+			out.push({ h, l, rgb, lab });
 		}
 	return out;
 }
