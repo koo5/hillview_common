@@ -149,15 +149,69 @@ export class CameraFrusta {
 
 // hue bands left out of the palette: amber to yellow (an injected photograph's cameras, and the workbench's highlight)
 // and the green of every bottom edge
-const SKIP: [number, number][] = [[25, 65], [95, 160]];
-const ALLOWED = 360 - SKIP.reduce((s, [a, b]) => s + b - a, 0);
+const SKIP: [number, number][] = [[25, 70], [95, 160]];
+const LEVELS = [0.45, 0.58, 0.71];
+const HUE_STEP = 3;
+/** the first solve's colour: the blue a run's own cameras have always had */
+const FIRST = { h: 210, l: 0.58 };
 
-/** the tint of solve `i` (0-based): golden-angle steps through the hues outside SKIP, so neighbours differ most */
+type Candidate = { h: number; l: number; rgb: number; lab: [number, number, number] };
+let candidates: Candidate[] | null = null;
+/** the candidate each solve took, in order; and each candidate's distance to the nearest colour taken */
+const taken: number[] = [];
+let nearest: number[] = [];
+
+/**
+ * The tint of solve `i` (0-based). Each solve takes, of the candidate colours (the hues outside SKIP at three
+ * lightnesses), the one farthest in OKLab from every colour the solves before it took: so any number of solves are
+ * spread as far apart as the candidates allow, and a solve's colour never depends on how many come after it.
+ * Golden-angle hues alone come back within a few degrees at Fibonacci distances (solves 0 and 34, 3.4 degrees).
+ */
 export function solveTint(i: number): number {
-	let h = ((i * 137.50776405) % 360) * (ALLOWED / 360);
-	for (const [a, b] of SKIP) if (h >= a) h += b - a;
-	return hsl(h, 0.8, 0.6);
+	if (!Number.isInteger(i) || i < 0) throw new Error(`solveTint: ${i} is not a solve index`);
+	const c = (candidates ??= makeCandidates());
+	while (taken.length <= i) {
+		let k: number;
+		if (taken.length >= c.length) k = taken[taken.length - c.length];    // every candidate taken: they repeat in order
+		else if (!taken.length) k = c.findIndex((x) => x.h === FIRST.h && x.l === FIRST.l);
+		else {
+			k = 0;
+			for (let j = 1; j < c.length; j++) if (nearest[j] > nearest[k]) k = j;
+		}
+		const at = c[k].lab;
+		nearest = taken.length ? nearest.map((d, j) => Math.min(d, labDistance(c[j].lab, at))) : c.map((x) => labDistance(x.lab, at));
+		taken.push(k);
+	}
+	return c[taken[i]].rgb;
 }
+
+function makeCandidates(): Candidate[] {
+	const out: Candidate[] = [];
+	for (const l of LEVELS)
+		for (let h = 0; h < 360; h += HUE_STEP) {
+			if (SKIP.some(([a, b]) => h >= a && h < b)) continue;
+			const rgb = hsl(h, 0.8, l);
+			out.push({ h, l, rgb, lab: oklab(rgb) });
+		}
+	return out;
+}
+
+/** an sRGB colour (0xrrggbb) in OKLab */
+export function oklab(rgb: number): [number, number, number] {
+	const lin = (c: number) => {
+		const v = c / 255;
+		return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+	};
+	const r = lin((rgb >> 16) & 255), g = lin((rgb >> 8) & 255), b = lin(rgb & 255);
+	const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+	const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+	const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+	return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+		1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+		0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+}
+
+const labDistance = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 function hsl(h: number, s: number, l: number): number {
 	const a = s * Math.min(l, 1 - l);

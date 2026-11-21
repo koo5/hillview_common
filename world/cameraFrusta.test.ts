@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three';
-import { CONE_VERTICES, CameraFrusta, solveTint, type Cone, type Rot, type Vec3 } from './cameraFrusta';
+import { CONE_VERTICES, CameraFrusta, oklab, solveTint, type Cone, type Rot, type Vec3 } from './cameraFrusta';
 
 // a camera turned about two axes, so a mixed-up row or column would show
 function rotation(yaw: number, pitch: number): Rot {
@@ -94,18 +94,38 @@ describe('a tint per solve', () => {
 	test('a town of 44 solves gets 44 colours, none amber, yellow or bottom-edge green, the same every time', () => {
 		const tints = Array.from({ length: 44 }, (_, i) => solveTint(i));
 		expect(new Set(tints).size).toBe(44);
+		// never inside the left-out bands, amber to yellow [25, 70) and green [95, 160) (half a degree for rounding to RGB)
 		for (const t of tints) {
 			const h = hue(t);
-			expect(h < 24 || h > 66).toBe(true);
-			expect(h < 94 || h > 161).toBe(true);
+			expect(h > 25.5 && h < 69.5, `hue ${h}`).toBe(false);
+			expect(h > 95.5 && h < 159.5, `hue ${h}`).toBe(false);
 		}
 		expect(Array.from({ length: 44 }, (_, i) => solveTint(i))).toEqual(tints);
+		expect(solveTint(0)).toBe(hslHex(210, 0.8, 0.58));          // the blue a run's own cameras have
 	});
 
-	test('neighbouring solves differ by a wide step of hue', () => {
-		for (let i = 0; i < 20; i++) {
-			const d = Math.abs(hue(solveTint(i)) - hue(solveTint(i + 1)));
-			expect(Math.min(d, 360 - d)).toBeGreaterThan(45);
+	test('no two of a town\'s solves look alike: every pair of 44 apart in OKLab, solves 0 and 34 among them', () => {
+		const labs = Array.from({ length: 44 }, (_, i) => oklab(solveTint(i)));
+		let min = Infinity, at = [0, 0];
+		for (let i = 0; i < labs.length; i++) for (let j = i + 1; j < labs.length; j++) {
+			const d = Math.hypot(labs[i][0] - labs[j][0], labs[i][1] - labs[j][1], labs[i][2] - labs[j][2]);
+			if (d < min) { min = d; at = [i, j]; }
 		}
+		// golden-angle hues alone put solves 0 and 34 3.4 degrees apart: 0.011 here
+		expect(min, `solves ${at}`).toBeGreaterThan(0.05);
+	});
+
+	test('a solve keeps its colour however many solves follow it, and an index that is none is refused', () => {
+		const first = solveTint(5);
+		solveTint(120);
+		expect(solveTint(5)).toBe(first);
+		expect(() => solveTint(-1)).toThrow('not a solve index');
+		expect(() => solveTint(1.5)).toThrow('not a solve index');
 	});
 });
+
+/** 0xrrggbb of an HSL colour, as the palette makes its candidates */
+function hslHex(h: number, s: number, l: number): number {
+	const c = new THREE.Color().setHSL(h / 360, s, l, THREE.SRGBColorSpace);
+	return c.getHex(THREE.SRGBColorSpace);
+}
