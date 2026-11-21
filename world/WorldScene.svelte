@@ -175,8 +175,10 @@
 	/** the terrain's tiles: ready/wanted, and whether none is still loading (what a test waits for) */
 	let tiles = $state('');
 	let settled = $state(false);
-	/** the channel's towns, one cloud each, each placed from its own town's origin (its version's frame) */
-	let atlases: AtlasCloud[] = [];
+	/** the channel's towns in one cloud and one budget, each town placed from its own origin (its version's frame) */
+	let atlas: AtlasCloud | null = null;
+	/** the towns whose version could not be read: said on the page while the others draw */
+	let atlasFailed: string | null = null;
 	/** the atlas's resident points and pending blocks over its towns; a failure, said on the page */
 	let atlasState = $state('');
 	let atlasError = $state<string | null>(null);
@@ -213,7 +215,7 @@
 				.decompose(camera.position, camera.quaternion, camera.scale);
 		}
 		frame = next;
-		for (const a of atlases) a.setScene(frame);
+		atlas?.setScene(frame);
 		terrain?.setFrame(next);
 		buildings?.setFrame(next);
 		labelPool?.setFrame(next);
@@ -461,7 +463,7 @@
 		const g = terrain?.groundAt(lat, lon);
 		if (g) { ground = g.h; groundFrom = `terrain z${g.z}, ${g.src === null ? 'source ?' : SOURCE_NAMES[g.src] ?? `source ${g.src}`}`; }
 		else if (ground !== null && !groundFrom.startsWith('last')) groundFrom = `last known (${groundFrom})`;
-		const fromAtlas = ground === null ? atlases.map((a) => a.groundAt(lat, lon)).find((h) => h !== null) ?? null : null;
+		const fromAtlas = ground === null ? atlas?.groundAt(lat, lon) ?? null : null;
 		standOn = ground ?? fromAtlas ?? 0;
 		if (ground === null) groundFrom = fromAtlas !== null ? 'the atlas points' : 'unknown: 0 m (no terrain, no atlas here)';
 		const over = sharedAltitude === null ? standOn + eyeM
@@ -493,13 +495,12 @@
 			lastChange = performance.now();
 			terrain?.update(cam, v);
 			buildings?.update(cam, v);
-			const heightPx = renderer.getDrawingBufferSize(new three!.Vector2()).y;
-			for (const a of atlases) a.update(camera, heightPx, depthMode === 'reversed');
+			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
 		}
 		// drawn only on change: a view the gate held back is asked for once its interval is up
 		else if (ask === 'soon' && !retry) retry = setTimeout(() => { retry = 0; draw(); }, gate.interval);
 		// the atlas's waiting blocks join this frame, up to its upload cap (ea14 A-1); more ask for the next frame
-		for (const a of atlases) a.beforeRender();
+		atlas?.beforeRender();
 		if (labelPool) {
 			// drawn where its depth can be read, so the names can be judged against it
 			const size = renderer.getDrawingBufferSize(new three!.Vector2());
@@ -520,11 +521,11 @@
 			const b = buildings.stats;
 			buildingsAttr = `${b.drawn} drawn, ${b.loading} loading, ${b.capped} capped`;
 		} else buildingsAttr = '';
-		if (atlases.length) {
-			const s = atlases.map((a) => a.summary);
-			atlasState = `${s.reduce((n, a) => n + a.points, 0)} points${s.some((a) => a.limited) ? ' (budget full)' : ''}`
-				+ `${atlases.every((a) => a.idle) ? '' : ', loading'}`;
-			atlasError = atlases.map((a) => a.error).find((e) => e !== null) ?? null;
+		if (atlas) {
+			const a = atlas.summary;
+			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
+			const errors = [atlasFailed, atlas.error].filter((e): e is string => e !== null);
+			atlasError = errors.length ? `atlas: ${errors.join('; ')}` : null;
 		}
 		lastAsk = ask;
 		settle();
@@ -537,7 +538,7 @@
 		const st = terrain?.stats;
 		if (!st) return;
 		settled = st.wanted > 0 && st.loading === 0 && lastAsk !== 'soon' && atlasOpened !== 'opening' &&
-			atlases.every((a) => a.idle && !a.error) && (!buildings || buildings.settled) && !labelPool?.stats.loading &&
+			(!atlas || (atlas.idle && !atlas.error && !atlasFailed)) && (!buildings || buildings.settled) && !labelPool?.stats.loading &&
 			(!labelPool || !worldNames?.judging || worldNames.judgedAt >= lastChange);
 	}
 
@@ -791,11 +792,12 @@
 
 	async function switchAtlas(url: string, ch: string | null, mib: number) {
 		const generation = ++atlasGeneration;
-		for (const a of atlases) {
-			scene?.remove(a.object);
-			a.dispose();
+		if (atlas) {
+			scene?.remove(atlas.object);
+			atlas.dispose();
 		}
-		atlases = [];
+		atlas = null;
+		atlasFailed = null;
 		atlasVersions = [];
 		atlasState = '';
 		atlasError = null;
@@ -805,26 +807,27 @@
 		atlasOpened = 'opening';
 		atlasState = 'opening';
 		try {
-			const found = await loadAtlases(url, ch, { signal: abort.signal });
+			const { loaded, failed } = await loadAtlases(url, ch, { signal: abort.signal });
 			if (destroyed || generation !== atlasGeneration || !frame || !three || !scene) return;
-			// one cloud per town, each from its own town's origin; the point budget is split between them (a residency's
-			// budget is fixed when it is made: WorldResidency)
-			const clouds = found.map((a) => new AtlasCloud(three!, { treeUrl: a.treeUrl, frame: new Frame(...a.version.origin),
-				scene: frame!, requests, budgetMiB: mib / found.length, onChange: () => draw() }));
+			const said = failed.map((f) => `${f.entry.town.label}: ${f.error}`).join('; ');
+			if (!loaded.length) throw new Error(said);
+			// every town in one cloud and one budget (AtlasCloud), each from its own town's origin
+			const cloud = new AtlasCloud(three, { towns: loaded.map((a) => ({ label: a.entry.town.label, treeUrl: a.treeUrl,
+				frame: new Frame(...a.version.origin) })), scene: frame, requests, budgetMiB: mib, onChange: () => draw() });
 			try {
-				await Promise.all(clouds.map((c) => c.open()));
+				await cloud.open();
 			} catch (e) {
-				for (const c of clouds) c.dispose();
-				throw e;
+				cloud.dispose();
+				throw new Error([said, e instanceof Error ? e.message : String(e)].filter(Boolean).join('; '));
 			}
-			if (destroyed || generation !== atlasGeneration) { for (const c of clouds) c.dispose(); return; }
-			// a re-layout during the open went by while no cloud was held: place each in today's frame
-			for (const c of clouds) {
-				c.setScene(frame!);
-				scene.add(c.object);
-			}
-			atlases = clouds;
-			atlasVersions = found.map((a) => a.version);
+			if (destroyed || generation !== atlasGeneration) { cloud.dispose(); return; }
+			// a re-layout during the open went by while atlas was null: place the cloud in today's frame
+			cloud.setScene(frame!);
+			atlas = cloud;
+			atlasFailed = said || null;
+			const open = new Set(cloud.openTowns);
+			atlasVersions = loaded.filter((_, i) => open.has(i)).map((a) => a.version);
+			scene.add(cloud.object);
 			atlasOpened = 'open';
 			changed();
 		} catch (e) {
@@ -847,7 +850,7 @@
 		if (gestureFrame) cancelAnimationFrame(gestureFrame);
 		if (stickFrame) cancelAnimationFrame(stickFrame);
 		if (foldTimer) clearTimeout(foldTimer);
-		for (const a of atlases) a.dispose();
+		atlas?.dispose();
 		buildings?.dispose();
 		labelPool?.dispose();
 		worldNames?.dispose();

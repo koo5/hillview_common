@@ -9,10 +9,30 @@ import type {Vec3} from './geodesy';
  */
 export function planWorldView(nodes:CopcNode[],
  measure:(node:CopcNode)=>{visible:boolean;distance:number;pixels:number}) {
+ return rankWorldView(nodes,measure).map(r=>r.node);
+}
+
+/** planWorldView's plan with what ranked each node: in view, and how far (metres, in the tree's frame). */
+export type RankedNode={node:CopcNode;index:number;visible:boolean;distance:number};
+export function rankWorldView(nodes:CopcNode[],
+ measure:(node:CopcNode)=>{visible:boolean;distance:number;pixels:number}):RankedNode[] {
  const ranked=nodes.map((node,index)=>({node,index,...measure(node)}))
   .filter(r=>r.node.depth<=1||(r.visible&&r.pixels>=64));
- ranked.sort((a,b)=>Number(b.visible)-Number(a.visible)||a.distance-b.distance||a.node.depth-b.node.depth||a.index-b.index);
- return ranked.map(r=>r.node);
+ ranked.sort(byRank);
+ return ranked.map(({node,index,visible,distance})=>({node,index,visible,distance}));
+}
+
+const byRank=(a:{node:CopcNode;index:number;visible:boolean;distance:number},b:typeof a)=>
+ Number(b.visible)-Number(a.visible)||a.distance-b.distance||a.node.depth-b.node.depth||a.index-b.index;
+
+/** Several trees' plans as one: the same rule across them (in view first, then nearer, then coarser), so one budget
+ * holds what the camera most needs whichever tree it is in. Distances are metres from one camera, each measured in
+ * its own tree's frame, so they compare. Ties keep each plan's own order, the earlier plan first. */
+export function mergeWorldPlans<T>(plans:{ranked:RankedNode[];tag:T}[]):{node:CopcNode;tag:T}[] {
+ const all=plans.flatMap((p,plan)=>p.ranked.map((r,rank)=>({...r,plan,rank,tag:p.tag})));
+ all.sort((a,b)=>Number(b.visible)-Number(a.visible)||a.distance-b.distance||a.node.depth-b.node.depth||
+  a.plan-b.plan||a.rank-b.rank);
+ return all.map(r=>({node:r.node,tag:r.tag}));
 }
 
 
