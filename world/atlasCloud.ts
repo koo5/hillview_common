@@ -1,7 +1,7 @@
 /**
- * The public atlas in a scene (recon ea05 step 4): a published world snapshot read from its static files
- * (atlas.hillview.cz: <channel>.json names the version, w/<resolution>/<key>/ holds version.json and the
- * COPC tree), streamed as the workbench streams it -- planned by what the camera sees (cameraMeasure,
+ * The public atlas in a scene: published world snapshots read from their static files. A world is one town's;
+ * <channel>.towns.json names one version per town, and w/<resolution>/<key>/ holds each version's version.json
+ * and COPC tree. Each is streamed as the workbench streams it -- planned by what the camera sees (cameraMeasure,
  * planWorldView), read in batches through the request scheduler (readBlocks), held within a budget
  * (WorldResidency) -- and drawn as one point object.
  *
@@ -23,16 +23,19 @@ import { cameraMeasure, planWorldView, worldBatch } from './worldView';
 
 type Three = typeof THREE_NS;
 
-export type AtlasPointer = { schema: 1; key: string; resolution: 'stored' | 'full'; path: string; built_at: number; points: number };
+export type AtlasTown = { id: string; label: string };
+/** one town's entry in a channel's pointer */
+export type AtlasEntry = { town: AtlasTown; key: string; resolution: 'stored' | 'full'; path: string; built_at: number; points: number };
+export type AtlasTowns = { schema: 2; towns: AtlasEntry[] };
 export type AtlasCredit = { text: string; url: string | null };
 export type AtlasVersion = {
-	schema: 1; key: string; resolution: 'stored' | 'full'; built_at: number; points: number;
+	schema: 2; key: string; resolution: 'stored' | 'full'; built_at: number; points: number; town: AtlasTown;
 	origin: [number, number, number]; overlap: 'all' | 'nearest' | 'drawn' | 'drawn_once';
 	licence: { spdx: string; name: string; url: string }; credits: AtlasCredit[]; modified: string;
 	runs: { i: number; id: string; name: string | null; points: number; dense_state: string | null }[];
 	files: { tree: string; cameras: string };
 };
-export type Atlas = { pointer: AtlasPointer; version: AtlasVersion; treeUrl: string; camerasUrl: string };
+export type Atlas = { entry: AtlasEntry; version: AtlasVersion; treeUrl: string; camerasUrl: string };
 
 async function json<T>(f: typeof fetch, url: string, signal?: AbortSignal): Promise<T> {
 	const r = await f(url, { signal });
@@ -42,38 +45,60 @@ async function json<T>(f: typeof fetch, url: string, signal?: AbortSignal): Prom
 
 const root = (base: string) => base.replace(/\/+$/, '');
 
-/** A channel's pointer: which snapshot it names (what a version picker labels). */
-export async function loadPointer(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}):
-	Promise<AtlasPointer> {
-	const pointer = await json<AtlasPointer>(opts.fetch ?? fetch, `${root(base)}/${encodeURIComponent(channel)}.json`, opts.signal);
-	if (pointer.schema !== 1 || !/^[0-9a-f]{16}$/.test(pointer.key) || pointer.path !== `w/${pointer.resolution}/${pointer.key}/`)
-		throw new Error(`atlas: ${channel}.json is not a schema-1 pointer at its own key`);
+/** A channel's pointer: one version per town (what a version picker labels). */
+export async function loadTowns(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}):
+	Promise<AtlasTowns> {
+	const name = `${encodeURIComponent(channel)}.towns.json`;
+	const pointer = await json<AtlasTowns>(opts.fetch ?? fetch, `${root(base)}/${name}`, opts.signal);
+	if (pointer.schema !== 2 || !Array.isArray(pointer.towns) || pointer.towns.length === 0)
+		throw new Error(`atlas: ${name} is not a schema-2 pointer naming at least one town`);
+	const seen = new Set<string>();
+	for (const e of pointer.towns) {
+		if (!e.town || typeof e.town.id !== 'string' || !e.town.label || !/^[0-9a-f]{16}$/.test(e.key)
+			|| e.path !== `w/${e.resolution}/${e.key}/`)
+			throw new Error(`atlas: ${name} names a town without its id and label, or a version not at its own key`);
+		if (seen.has(e.town.id)) throw new Error(`atlas: ${name} names ${e.town.label} twice`);
+		seen.add(e.town.id);
+	}
 	return pointer;
 }
 
-/** A channel's current snapshot: its pointer, its version record and the URLs of its files. */
-export async function loadAtlas(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<Atlas> {
+/** A channel's current snapshots, one per town: each one's entry, version record and the URLs of its files. */
+export async function loadAtlases(base: string, channel: string, opts: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<Atlas[]> {
 	const f = opts.fetch ?? fetch;
-	const pointer = await loadPointer(base, channel, opts);
-	const folder = `${root(base)}/${pointer.path}`;
-	const version = await json<AtlasVersion>(f, `${folder}version.json`, opts.signal);
-	if (version.schema !== 1 || version.key !== pointer.key || version.resolution !== pointer.resolution)
-		throw new Error(`atlas: ${folder}version.json describes another version`);
-	if (!Array.isArray(version.origin) || version.origin.length !== 3 || !version.origin.every(Number.isFinite))
-		throw new Error(`atlas: ${folder}version.json has no origin`);
-	return { pointer, version, treeUrl: `${folder}${version.files.tree}`, camerasUrl: `${folder}${version.files.cameras}` };
+	const pointer = await loadTowns(base, channel, opts);
+	return Promise.all(pointer.towns.map(async (entry) => {
+		const folder = `${root(base)}/${entry.path}`;
+		const version = await json<AtlasVersion>(f, `${folder}version.json`, opts.signal);
+		if (version.schema !== 2 || version.key !== entry.key || version.resolution !== entry.resolution
+			|| version.town?.id !== entry.town.id)
+			throw new Error(`atlas: ${folder}version.json describes another version than ${entry.town.label}'s`);
+		if (!Array.isArray(version.origin) || version.origin.length !== 3 || !version.origin.every(Number.isFinite))
+			throw new Error(`atlas: ${folder}version.json has no origin`);
+		return { entry, version, treeUrl: `${folder}${version.files.tree}`, camerasUrl: `${folder}${version.files.cameras}` };
+	}));
 }
 
 const page = (url: string) => url.replace(/\/+$/, '');
 
-/** the credit line of a scene drawing this snapshot over earth's layers: earth's sources, the snapshot's licence,
- * then its own credits less the sources earth already names (one source page, one credit: ČÚZK's and Copernicus'
- * terrain, which placed the snapshot and draws the ground). The export's README keeps the full list. */
-export function atlasCredits(earth: Credit[], v: AtlasVersion): Credit[] {
+/** the credit line of a scene drawing these snapshots over earth's layers: earth's sources, then per snapshot its
+ * licence and its own credits less the sources earth already names (one source page, one credit: ČÚZK's and
+ * Copernicus' terrain, which placed the snapshot and draws the ground), each line once whichever towns share it.
+ * Each export's README keeps its full list. */
+export function atlasCredits(earth: Credit[], versions: AtlasVersion[]): Credit[] {
 	const shown = new Set(earth.map((c) => page(c.url)));
-	return [...earth, { text: `Point cloud: ${v.licence.name}`, url: v.licence.url, licence: v.licence.spdx },
-		...v.credits.filter((c) => c.url === null || !shown.has(page(c.url)))
-			.map((c) => ({ text: c.text, url: c.url ?? v.licence.url, licence: v.licence.spdx }))];
+	const out: Credit[] = [...earth];
+	const said = new Set<string>();
+	const add = (c: Credit) => {
+		const k = `${c.text}\u0000${c.url}`;
+		if (!said.has(k)) { said.add(k); out.push(c); }
+	};
+	for (const v of versions) {
+		add({ text: `Point cloud: ${v.licence.name}`, url: v.licence.url, licence: v.licence.spdx });
+		for (const c of v.credits.filter((c) => c.url === null || !shown.has(page(c.url))))
+			add({ text: c.text, url: c.url ?? v.licence.url, licence: v.licence.spdx });
+	}
+	return out;
 }
 
 export class AtlasCloud {

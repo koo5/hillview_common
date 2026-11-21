@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { atlasCredits, loadAtlas } from './atlasCloud';
+import { atlasCredits, loadAtlases, loadTowns } from './atlasCloud';
 
 const KEY = '120f2464015ecdee';
+const KEY2 = '6ebde34c0dda350d';
+const BRANDYS = { id: 'ee1326e3-b779-42b7-86ca-7609b5f56a1d', label: 'Brandýs nad Labem' };
+const SADSKA = { id: '0f8c2b8e-bc00-4029-8a9c-263d85939fb8', label: 'Sadská' };
 const version = (over: Record<string, unknown> = {}) => ({
-	schema: 1, key: KEY, resolution: 'full', built_at: 1, points: 10, origin: [50.18, 14.66, 44.6], overlap: 'all',
+	schema: 2, key: KEY, resolution: 'full', built_at: 1, points: 10, town: BRANDYS, origin: [50.18, 14.66, 44.6], overlap: 'all',
 	licence: { spdx: 'CC-BY-SA-4.0', name: 'x', url: 'u' }, credits: [{ text: 'Photographs: wegavision', url: null }],
 	modified: 'm', runs: [], files: { tree: 'world.copc.laz', cameras: 'cameras.json' }, ...over
 });
+const entry = (town: typeof BRANDYS, key: string, over: Record<string, unknown> = {}) =>
+	({ town, key, resolution: 'full', path: `w/full/${key}/`, built_at: 1, points: 10, ...over });
 
 function site(files: Record<string, unknown>) {
 	const asked: string[] = [];
@@ -18,28 +23,43 @@ function site(files: Record<string, unknown>) {
 	return { f, asked };
 }
 
-describe('loadAtlas', () => {
-	it('follows the channel pointer to its version and the files beside it', async () => {
+describe('loadAtlases', () => {
+	it("follows the channel's towns pointer to each town's version and the files beside it", async () => {
 		const { f, asked } = site({
-			'prod.json': { schema: 1, key: KEY, resolution: 'full', path: `w/full/${KEY}/`, built_at: 1, points: 10 },
-			[`w/full/${KEY}/version.json`]: version()
+			'prod.towns.json': { schema: 2, towns: [entry(BRANDYS, KEY), entry(SADSKA, KEY2)] },
+			[`w/full/${KEY}/version.json`]: version(),
+			[`w/full/${KEY2}/version.json`]: version({ key: KEY2, town: SADSKA, origin: [50.137, 14.984, 230.1] })
 		});
-		const a = await loadAtlas('https://atlas.example/', 'prod', { fetch: f });
-		expect(a.treeUrl).toBe(`https://atlas.example/w/full/${KEY}/world.copc.laz`);
-		expect(a.camerasUrl).toBe(`https://atlas.example/w/full/${KEY}/cameras.json`);
-		expect(a.version.licence.spdx).toBe('CC-BY-SA-4.0');
-		expect(asked).toEqual(['https://atlas.example/prod.json', `https://atlas.example/w/full/${KEY}/version.json`]);
+		const a = await loadAtlases('https://atlas.example/', 'prod', { fetch: f });
+		expect(a.map((x) => x.version.town.label)).toEqual(['Brandýs nad Labem', 'Sadská']);
+		expect(a[1].treeUrl).toBe(`https://atlas.example/w/full/${KEY2}/world.copc.laz`);
+		expect(a[1].camerasUrl).toBe(`https://atlas.example/w/full/${KEY2}/cameras.json`);
+		expect(a[1].version.origin).toEqual([50.137, 14.984, 230.1]);
+		expect(asked).toEqual(['https://atlas.example/prod.towns.json', `https://atlas.example/w/full/${KEY}/version.json`,
+			`https://atlas.example/w/full/${KEY2}/version.json`]);
 	});
 
-	it('refuses a pointer at another path, a version of another key, and a missing channel', async () => {
-		const bad = site({ 'prod.json': { schema: 1, key: KEY, resolution: 'full', path: 'w/full/0000000000000000/' } });
-		await expect(loadAtlas('https://atlas.example', 'prod', { fetch: bad.f })).rejects.toThrow(/its own key/);
-		const other = site({
-			'prod.json': { schema: 1, key: KEY, resolution: 'full', path: `w/full/${KEY}/` },
+	it('refuses a pointer at another path, a town twice, a version of another key or town, and a missing channel', async () => {
+		const path = site({ 'prod.towns.json': { schema: 2, towns: [entry(BRANDYS, KEY, { path: 'w/full/0000000000000000/' })] } });
+		await expect(loadTowns('https://atlas.example', 'prod', { fetch: path.f })).rejects.toThrow(/its own key/);
+		const twice = site({ 'prod.towns.json': { schema: 2, towns: [entry(BRANDYS, KEY), entry(BRANDYS, KEY2)] } });
+		await expect(loadTowns('https://atlas.example', 'prod', { fetch: twice.f })).rejects.toThrow(/Brandýs nad Labem twice/);
+		const none = site({ 'prod.towns.json': { schema: 2, towns: [] } });
+		await expect(loadTowns('https://atlas.example', 'prod', { fetch: none.f })).rejects.toThrow(/at least one town/);
+		// the pointer of a single world, as published before towns, is not read
+		const single = site({ 'prod.towns.json': { schema: 1, key: KEY, resolution: 'full', path: `w/full/${KEY}/` } });
+		await expect(loadTowns('https://atlas.example', 'prod', { fetch: single.f })).rejects.toThrow(/schema-2/);
+		const otherKey = site({
+			'prod.towns.json': { schema: 2, towns: [entry(BRANDYS, KEY)] },
 			[`w/full/${KEY}/version.json`]: version({ key: 'ffffffffffffffff' })
 		});
-		await expect(loadAtlas('https://atlas.example', 'prod', { fetch: other.f })).rejects.toThrow(/another version/);
-		await expect(loadAtlas('https://atlas.example', 'beta', { fetch: other.f })).rejects.toThrow(/404/);
+		await expect(loadAtlases('https://atlas.example', 'prod', { fetch: otherKey.f })).rejects.toThrow(/another version/);
+		const otherTown = site({
+			'prod.towns.json': { schema: 2, towns: [entry(SADSKA, KEY)] },
+			[`w/full/${KEY}/version.json`]: version()
+		});
+		await expect(loadAtlases('https://atlas.example', 'prod', { fetch: otherTown.f })).rejects.toThrow(/than Sadská's/);
+		await expect(loadAtlases('https://atlas.example', 'beta', { fetch: otherTown.f })).rejects.toThrow(/404/);
 	});
 });
 
@@ -49,19 +69,31 @@ describe('atlasCredits', () => {
 		{ text: 'Copernicus WorldDEM-30 ...', url: 'https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model', licence: 'c' },
 		{ text: 'ČÚZK, 2024', url: 'https://geoportal.cuzk.gov.cz', licence: 'CC BY 4.0' }
 	];
+	const credits = [
+		{ text: 'Photographs: wegavision, via Panoramax', url: 'https://panoramax.openstreetmap.fr' },
+		{ text: '© OpenStreetMap contributors. Placements fitted in part ...', url: 'https://www.openstreetmap.org/copyright' },
+		{ text: '© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0): heights fitted to the terrain', url: 'https://geoportal.cuzk.cz/' },
+		{ text: 'produced using Copernicus WorldDEM-30 ...', url: 'https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model' },
+		{ text: 'EGM2008 geoid', url: 'https://earth-info.nga.mil/' },
+		{ text: 'a credit with no page', url: null }
+	];
+	type Versions = Parameters<typeof atlasCredits>[1];
 	it("names each source once: the snapshot's terrain credits go where earth already names the page", () => {
-		const v = version({ credits: [
-			{ text: 'Photographs: wegavision, via Panoramax', url: 'https://panoramax.openstreetmap.fr' },
-			{ text: '© OpenStreetMap contributors. Placements fitted in part ...', url: 'https://www.openstreetmap.org/copyright' },
-			{ text: '© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0): heights fitted to the terrain', url: 'https://geoportal.cuzk.cz/' },
-			{ text: 'produced using Copernicus WorldDEM-30 ...', url: 'https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model' },
-			{ text: 'EGM2008 geoid', url: 'https://earth-info.nga.mil/' },
-			{ text: 'a credit with no page', url: null }
-		] }) as unknown as Parameters<typeof atlasCredits>[1];
-		const c = atlasCredits(earth, v);
+		const c = atlasCredits(earth, [version({ credits })] as unknown as Versions);
 		expect(c.map((x) => x.text)).toEqual(['© ČÚZK (DMR 5G / DMP 1G, CC BY 4.0)', 'Copernicus WorldDEM-30 ...', 'ČÚZK, 2024',
 			'Point cloud: x', 'Photographs: wegavision, via Panoramax', '© OpenStreetMap contributors. Placements fitted in part ...',
 			'EGM2008 geoid', 'a credit with no page']);
 		expect(c.at(-1)).toEqual({ text: 'a credit with no page', url: 'u', licence: 'CC-BY-SA-4.0' });
+	});
+
+	it("two towns: the licence and the shared sources once, each town's own photographers", () => {
+		const other = [{ text: 'Photographs: someone else, via Panoramax', url: 'https://panoramax.xyz' }, ...credits.slice(1)];
+		const c = atlasCredits(earth, [version({ credits }), version({ key: KEY2, town: SADSKA, credits: other })] as unknown as Versions);
+		const texts = c.map((x) => x.text);
+		expect(texts.filter((t) => t === 'Point cloud: x')).toHaveLength(1);
+		expect(texts.filter((t) => t.startsWith('© OpenStreetMap'))).toHaveLength(1);
+		expect(texts).toContain('Photographs: wegavision, via Panoramax');
+		expect(texts).toContain('Photographs: someone else, via Panoramax');
+		expect(texts.indexOf('Photographs: someone else, via Panoramax')).toBeGreaterThan(texts.indexOf('a credit with no page'));
 	});
 });
