@@ -13,10 +13,11 @@ const flat: OsmTile = {
 		ring: [[lat, lon], [lat, lon + d], [lat - d, lon + d], [lat - d, lon], [lat, lon]],
 		holes: [[[lat - q, lon + q], [lat - 3 * q, lon + q], [lat - 3 * q, lon + 3 * q], [lat - q, lon + 3 * q], [lat - q, lon + q]]] }],
 	roads: [[[lat + d, lon], [lat + d, lon + 5 * d]]],
+	walls: [[[lat - 2 * d, lon], [lat - 2 * d, lon + 3 * d]]],
 	water: []
 };
 const ground: GroundAt = () => ({ h: 230, z: 15 });
-const ALL: OsmKinds = { buildings: true, roads: true, water: true };
+const ALL: OsmKinds = { buildings: true, roads: true, walls: true, water: true };
 
 type Inner = { wanted: string[]; tiles: Map<string, { key: string; state: string; used: number; flat?: OsmTile;
 	group?: THREE.Group }>; ground(): void };
@@ -54,6 +55,9 @@ describe('FootprintTiles over vector tiles', () => {
 		inner.ground();
 		expect(fp.stats).toMatchObject({ ready: 2, loading: 0 });
 		expect(lines()).toBe(withRoads - 1);
+		fp.setKinds({ ...ALL, roads: false, walls: false });
+		inner.ground();
+		expect(lines()).toBe(withRoads - 2);
 		fp.dispose();
 	});
 

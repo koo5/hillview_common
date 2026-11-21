@@ -3,13 +3,15 @@ import { defaultLayers, readLayers } from './sceneLayers';
 
 describe('scene layers', () => {
 	it('starts on bare ground with every layer and the first atlas channel', () => {
-		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', ortho: true, models: true, osmBuildings: true, osmRoads: true, osmWater: true,
+		expect(defaultLayers(['prod', 'beta'])).toEqual({ terrain: 'bare', terrainShown: true, ortho: true, models: true,
+			osmBuildings: true, osmRoads: true, osmWalls: true, osmWater: true,
 			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
 		expect(defaultLayers([]).atlas).toBeNull();
 	});
 
 	it('keeps what was chosen', () => {
-		const chosen = { terrain: 'surface', ortho: false, models: false, osmBuildings: true, osmRoads: false, osmWater: true,
+		const chosen = { terrain: 'surface', terrainShown: false, ortho: false, models: false, osmBuildings: true, osmRoads: false,
+			osmWalls: false, osmWater: true,
 			atlas: 'beta', atlasMiB: 256, cameras: true, names: false, readout: true };
 		expect(readLayers(JSON.stringify(chosen), ['prod', 'beta'])).toEqual(chosen);
 		expect(readLayers(JSON.stringify({ ...chosen, atlas: null }), ['prod']).atlas).toBeNull();
@@ -17,7 +19,8 @@ describe('scene layers', () => {
 
 	it('falls back field by field: a channel no longer offered, a bad value, a broken or absent record', () => {
 		const r = readLayers(JSON.stringify({ terrain: 'dsm', ortho: false, atlas: 'gone' }), ['prod']);
-		expect(r).toEqual({ terrain: 'bare', ortho: false, models: true, osmBuildings: true, osmRoads: true, osmWater: true,
+		expect(r).toEqual({ terrain: 'bare', terrainShown: true, ortho: false, models: true, osmBuildings: true, osmRoads: true,
+			osmWalls: true, osmWater: true,
 			atlas: 'prod', atlasMiB: 64, cameras: false, names: true, readout: false });
 		// the one Buildings layer of before (city models, else OSM) is no longer read: each layer on its own default
 		expect(readLayers(JSON.stringify({ buildings: false }), ['prod'])).toEqual(defaultLayers(['prod']));

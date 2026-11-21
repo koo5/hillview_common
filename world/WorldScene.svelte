@@ -128,12 +128,14 @@
 	const EARTH_RETRY_MS = 30_000;
 	let earthRetry: ReturnType<typeof setTimeout> | 0 = 0;
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
-	const orthoShown = $derived(layers.ortho && !!urls?.orthoUrl);
+	/** the orthophoto drapes the terrain: with the terrain hidden it is not read */
+	const orthoShown = $derived(layers.ortho && layers.terrainShown && !!urls?.orthoUrl);
 	const modelsShown = $derived(layers.models && !!urls?.modelsUrl);
 	/** OpenStreetMap's layers from earth's vector tiles, each the viewer's own toggle: wherever they are, city models or
 	 * not, on whichever terrain is drawn (the operator, 2026-11-21: "let users toggle the layers") */
-	const osmKinds = $derived<OsmKinds>({ buildings: layers.osmBuildings, roads: layers.osmRoads, water: layers.osmWater });
-	const osmShown = $derived(!!urls?.osmUrl && (layers.osmBuildings || layers.osmRoads || layers.osmWater));
+	const osmKinds = $derived<OsmKinds>({ buildings: layers.osmBuildings, roads: layers.osmRoads, walls: layers.osmWalls,
+		water: layers.osmWater });
+	const osmShown = $derived(!!urls?.osmUrl && (layers.osmBuildings || layers.osmRoads || layers.osmWalls || layers.osmWater));
 	const namesShown = $derived(layers.names && !!urls?.namesUrl);
 	/** the atlas versions drawn, one per town: their licences and credits join the line */
 	let atlasVersions = $state.raw<AtlasVersion[]>([]);
@@ -247,7 +249,18 @@
 			terrain?.dispose();
 			ground = null;
 			terrain = new TerrainTiles(three!, { tileUrl, orthoUrl, orthoExtent: earth?.orthoExtent ?? undefined, frame: frame!, requests, onChange: changed });
+			terrain.group.visible = layers.terrainShown;
 			scene!.add(terrain.group);
+			changed();
+		});
+	});
+
+	/** the terrain hidden or shown: only its drawing; its heights still carry the camera, the readout and OSM */
+	$effect(() => {
+		const shown = layers.terrainShown;
+		untrack(() => {
+			if (!terrain) return;
+			terrain.group.visible = shown;
 			changed();
 		});
 	});

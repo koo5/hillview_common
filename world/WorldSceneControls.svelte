@@ -24,7 +24,7 @@
 		ortho: boolean;
 		/** the channel has IPR's city models */
 		models: boolean;
-		/** the channel has OpenStreetMap's vector tiles (buildings, roads, water) */
+		/** the channel has OpenStreetMap's vector tiles (buildings, roads, walls, water) */
 		osm: boolean;
 		/** the channel has place names */
 		names: boolean;
@@ -82,10 +82,11 @@
 			{#if ground}
 				<fieldset>
 					<legend>Ground</legend>
+					<label title="hidden, its heights still carry the camera and OSM"><input type="checkbox" bind:checked={layers.terrainShown} data-testid="{testid}-terrain-shown" /> terrain</label>
 					<label><input type="radio" bind:group={layers.terrain} value="bare" data-testid="{testid}-terrain-bare" /> bare terrain</label>
 					<label><input type="radio" bind:group={layers.terrain} value="surface" data-testid="{testid}-terrain-surface" /> surface (roofs, trees)</label>
 					{#if ortho}
-						<label><input type="checkbox" bind:checked={layers.ortho} data-testid="{testid}-ortho" /> aerial photo</label>
+						<label><input type="checkbox" bind:checked={layers.ortho} disabled={!layers.terrainShown} data-testid="{testid}-ortho" /> aerial photo</label>
 					{/if}
 				</fieldset>
 			{/if}
@@ -101,6 +102,7 @@
 					{#if osm}
 						<label title="outlines raised to their tagged height, else 3 m a floor, else 3 m"><input type="checkbox" bind:checked={layers.osmBuildings} data-testid="{testid}-osm-buildings" /> OSM buildings</label>
 						<label title="laid on the terrain"><input type="checkbox" bind:checked={layers.osmRoads} data-testid="{testid}-osm-roads" /> OSM roads</label>
+						<label title="retaining walls, laid on the terrain"><input type="checkbox" bind:checked={layers.osmWalls} data-testid="{testid}-osm-walls" /> OSM walls</label>
 						<label title="rivers, streams and shores, laid on the terrain"><input type="checkbox" bind:checked={layers.osmWater} data-testid="{testid}-osm-water" /> OSM water</label>
 					{/if}
 				</fieldset>

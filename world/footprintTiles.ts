@@ -16,9 +16,9 @@
  *
  * The same drawing reads earth's OpenStreetMap vector tiles too (format 'mvt': a channel's `osm` release). Those carry
  * no heights, so everything stands on the terrain the scene draws (`ground`: its height and tile zoom at a point):
- * buildings at their vertices, roads and water every DRAPE_STEP_M along. A tile waits until the terrain answers under
- * all of it, and is built again when finer terrain arrives at its centre. Buildings, roads and water are each the
- * viewer's own toggle (OsmKinds), drawn wherever they are, city models or not (the operator, 2026-11-21).
+ * buildings at their vertices, roads, walls and water every DRAPE_STEP_M along. A tile waits until the terrain answers
+ * under all of it, and is built again when finer terrain arrives at its centre. Buildings, roads, walls and water are
+ * each the viewer's own toggle (OsmKinds), drawn wherever they are, city models or not (the operator, 2026-11-21).
  */
 import type * as THREE_NS from 'three';
 import { Frame, rigid, type Vec3 } from './geodesy';
@@ -150,9 +150,9 @@ export function buildMapTile(THREE: Three, frame: Frame, t: MapTile, replaced = 
 const GROUND_BUDGET_MS = 8;
 
 /** which of a vector tile's layers are drawn: each the viewer's own toggle */
-export type OsmKinds = { buildings: boolean; roads: boolean; water: boolean };
+export type OsmKinds = { buildings: boolean; roads: boolean; walls: boolean; water: boolean };
 
-/** a road or shore laid on the terrain gets a vertex at least this often, so it follows the ground between OSM's own */
+/** a road, wall or shore laid on the terrain gets a vertex at least this often, so it follows the ground between OSM's own */
 const DRAPE_STEP_M = 8;
 
 /** the ground at a point as the terrain says it: ellipsoidal height, and the zoom of the tile that answered */
@@ -165,7 +165,7 @@ const metres = (lat0: number, lon0: number, lat1: number, lon1: number) => {
 
 /**
  * One vector tile stood on the ground (format 'mvt'), the layers `kinds` names: each building vertex at the terrain's
- * height under it; each road and shore at the terrain every DRAPE_STEP_M at most. Null while the terrain cannot answer
+ * height under it; each road, wall and shore at the terrain every DRAPE_STEP_M at most. Null while the terrain cannot answer
  * under the tile's centre or any of that: the tile waits for it. `groundZ` is the terrain zoom that answered at the
  * centre, so a finer one arriving later can build it again.
  */
@@ -213,9 +213,11 @@ export function groundedTile(z: number, x: number, y: number, osm: OsmTile, grou
 	};
 	const roads = kinds.roads ? draped(osm.roads) : [];
 	if (!roads) return null;
+	const walls = kinds.walls ? draped(osm.walls) : [];
+	if (!walls) return null;
 	const water = kinds.water ? draped(osm.water) : [];
 	if (!water) return null;
-	return { tile: { z, x, y, buildings, roads, walls: [], water }, groundZ: centre.z };
+	return { tile: { z, x, y, buildings, roads, walls, water }, groundZ: centre.z };
 }
 
 type Entry = { key: string; state: 'loading' | 'ready' | 'failed'; group?: THREE_NS.Group; data?: MapTile; labels?: TileLabel[];
@@ -251,7 +253,7 @@ export class FootprintTiles {
 	private kinds: OsmKinds | null;
 	setKinds(next: OsmKinds) {
 		const k = this.kinds;
-		if (k && k.buildings === next.buildings && k.roads === next.roads && k.water === next.water) return;
+		if (k && k.buildings === next.buildings && k.roads === next.roads && k.walls === next.walls && k.water === next.water) return;
 		this.kinds = { ...next };
 		for (const t of this.tiles.values()) if (t.flat) t.groundZ = undefined;
 	}

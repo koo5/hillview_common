@@ -4,7 +4,7 @@
  * building polygons, road and water lines, their OSM tags).
  *
  * mvtOsm turns one tile into what the scene draws of it, in latitude and longitude: its `building` layer's footprints,
- * its `road` layer's lines and its `water` layer's waterways and shores. A tile carries every building that touches it
+ * its `road` and `wall` layers' lines and its `water` layer's waterways and shores. A tile carries every building that touches it
  * or its buffer whole, so a building near a tile's edge is in two or more tiles; each is kept only by the tile that
  * holds its centroid, which is the same answer in every tile. A line is cut at the tile's own edge instead
  * (clipToTile), so each metre of it is drawn by one tile.
@@ -159,11 +159,11 @@ export function decodeMvt(bytes: Uint8Array): MvtLayer[] {
 export type FlatBuilding = { id: number | undefined; ring: [number, number][]; holes: [number, number][][];
 	height_m: number; height_source: 'height' | 'levels' | 'default' };
 
-/** a line in latitude and longitude: a road, a waterway, or a stretch of a lake's or river's shore */
+/** a line in latitude and longitude: a road, a wall, a waterway, or a stretch of a lake's or river's shore */
 export type FlatLine = [number, number][];
 
 /** what the scene draws of one vector tile */
-export type OsmTile = { buildings: FlatBuilding[]; roads: FlatLine[]; water: FlatLine[] };
+export type OsmTile = { buildings: FlatBuilding[]; roads: FlatLine[]; walls: FlatLine[]; water: FlatLine[] };
 
 /** a storey's height, for a building whose OSM tags give only `building:levels` */
 export const LEVEL_M = 3;
@@ -279,8 +279,8 @@ export function mvtLines(layers: MvtLayer[], name: string, z: number, x: number,
 	return out;
 }
 
-/** one tile, as the scene draws it: buildings, roads, water */
+/** one tile, as the scene draws it: buildings, roads, walls (earth's `wall`: retaining walls), water */
 export function mvtOsm(layers: MvtLayer[], z: number, x: number, y: number): OsmTile {
 	return { buildings: mvtBuildings(layers, z, x, y), roads: mvtLines(layers, 'road', z, x, y),
-		water: mvtLines(layers, 'water', z, x, y) };
+		walls: mvtLines(layers, 'wall', z, x, y), water: mvtLines(layers, 'water', z, x, y) };
 }

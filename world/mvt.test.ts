@@ -116,15 +116,17 @@ describe('vector tiles (mvt)', () => {
 		expect(clipToTile([[0, 100], [0, 200]], 4096)).toEqual([[[0, 100], [0, 200]]]);
 	});
 
-	test("roads are the road layer's lines; water its waterways and every shore, a lake's ring closed", () => {
+	test("roads and walls are their layers' lines; water its waterways and every shore, a lake's ring closed", () => {
 		const t = tileOf({
 			building: [{ tags: { osm_id: 1 }, rings: [square(100, 100, 100)] }],
 			road: [{ tags: { highway: 'residential' }, rings: [[[0, 2000], [4096, 2000]]], line: true }],
+			wall: [{ tags: { barrier: 'retaining_wall' }, rings: [[[100, 3000], [900, 3000], [900, 3500]]], line: true }],
 			water: [{ tags: { natural: 'water' }, rings: [square(3000, 3000, 200)] },
 				{ tags: { waterway: 'stream' }, rings: [[[500, 0], [500, 4096]]], line: true }]
 		});
 		const osm = mvtOsm(decodeMvt(t), 15, 17718, 11086);
-		expect([osm.buildings.length, osm.roads.length, osm.water.length]).toEqual([1, 1, 2]);
+		expect([osm.buildings.length, osm.roads.length, osm.walls.length, osm.water.length]).toEqual([1, 1, 1, 2]);
+		expect(osm.walls[0]).toHaveLength(3);
 		expect(osm.roads[0]).toHaveLength(2);
 		const shore = osm.water[0];
 		expect(shore).toHaveLength(5);
@@ -144,10 +146,11 @@ describe('a vector tile stood on the ground', () => {
 		building: [{ tags: { osm_id: 1, 'building:levels': '2' }, rings: [square(1000, 1000, 100), reversed(square(1030, 1030, 40))] },
 			{ tags: { osm_id: 2 }, rings: [square(3000, 3000, 100)] }],
 		road: [{ tags: { highway: 'residential' }, rings: [[[1000, 2000], [2024, 2000]]], line: true }],
+		wall: [{ tags: { barrier: 'retaining_wall' }, rings: [[[2500, 2500], [2900, 2500]]], line: true }],
 		water: [{ tags: { natural: 'water' }, rings: [square(3000, 500, 200)] }]
 	})), 15, 17718, 11086);
 	const ground = () => ({ h: 230.5, z: 15 });
-	const all: OsmKinds = { buildings: true, roads: true, water: true };
+	const all: OsmKinds = { buildings: true, roads: true, walls: true, water: true };
 
 	test('each building vertex, courtyards too, at the terrain under it; the zoom that answered at the centre kept', () => {
 		const g = groundedTile(15, 17718, 11086, osm, ground, all)!;
@@ -171,10 +174,11 @@ describe('a vector tile stood on the ground', () => {
 
 	test('each layer only when chosen', () => {
 		const only = (k: Partial<OsmKinds>) => {
-			const t = groundedTile(15, 17718, 11086, osm, ground, { buildings: false, roads: false, water: false, ...k })!.tile;
-			return [t.buildings.length, t.roads.length, t.water.length];
+			const t = groundedTile(15, 17718, 11086, osm, ground, { buildings: false, roads: false, walls: false, water: false, ...k })!.tile;
+			return [t.buildings.length, t.roads.length, t.walls.length, t.water.length];
 		};
-		expect([only({ buildings: true }), only({ roads: true }), only({ water: true })]).toEqual([[2, 0, 0], [0, 1, 0], [0, 0, 1]]);
+		expect([only({ buildings: true }), only({ roads: true }), only({ walls: true }), only({ water: true })])
+			.toEqual([[2, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
 	});
 
 	test('a tile waits while the terrain cannot answer, at its centre or under any vertex of what it draws', () => {
