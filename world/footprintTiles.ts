@@ -13,9 +13,16 @@
  * lines lifted a little off the ground.
  *
  * Overpass is a shared service: a refused tile (503) is retried by the desired-data scheduler, not drawn empty.
+ *
+ * The same drawing reads earth's OpenStreetMap vector tiles too (format 'mvt': a channel's `osm` release, the public
+ * scene's buildings outside the city models). Those carry no heights, so each building stands on the terrain the
+ * scene draws (`ground`: its height and tile zoom at a point): a tile waits until the terrain answers under every
+ * vertex, and is built again when finer terrain arrives at its centre. Buildings only: the public scene draws no
+ * roads or water from them.
  */
 import type * as THREE_NS from 'three';
-import { Frame, type Vec3 } from './geodesy';
+import { Frame, rigid, type Vec3 } from './geodesy';
+import { decodeMvt, mvtBuildings, type FlatBuilding } from './mvt';
 import { WorldRequests, responseOrThrow, requestHeaders } from './worldRequests';
 import { REF_VIEW, inFrustum, pxPerRad, tileLonLat, tileOf, type View } from './terrainTiles';
 
@@ -134,8 +141,59 @@ export function buildMapTile(THREE: Three, frame: Frame, t: MapTile, replaced = 
 	return grp;
 }
 
+/** format 'mvt': the main thread's time per frame for standing tiles on the ground. A dense town tile (~700 buildings,
+ * ~5,000 vertices) takes ~6 ms to build on a desktop and several times that on a phone; at least one per frame */
+const GROUND_BUDGET_MS = 8;
+
+/** a place another layer already draws buildings over (a city model's plan circle): footprints there are left out */
+export type PlanCircle = { lat: number; lon: number; radius: number };
+
+/** the ground at a point as the terrain says it: ellipsoidal height, and the zoom of the tile that answered */
+export type GroundAt = (lat: number, lon: number) => { h: number; z: number } | null;
+
+const metres = (lat0: number, lon0: number, lat1: number, lon1: number) => {
+	const k = 111_320, c = Math.cos((((lat0 + lat1) / 2) * Math.PI) / 180);
+	return Math.hypot((lat1 - lat0) * k, (lon1 - lon0) * k * c);
+};
+
+/**
+ * One vector tile's footprints stood on the ground (format 'mvt'): each vertex at the terrain's height under it, the
+ * buildings whose centroid lies inside one of `hidden` left out. Null while the terrain cannot answer under the tile's
+ * centre or any vertex: the tile waits for it. `groundZ` is the terrain zoom that answered at the centre, so a finer
+ * one arriving later can build it again.
+ */
+export function groundedTile(z: number, x: number, y: number, flat: FlatBuilding[], ground: GroundAt,
+	hidden: PlanCircle[]): { tile: MapTile; groundZ: number } | null {
+	const b = tileLonLat(z, x, y);
+	const centre = ground((b.n + b.s) / 2, (b.w + b.e) / 2);
+	if (!centre) return null;
+	// only the circles that reach this tile are tested building by building
+	const near = hidden.filter((c) => {
+		const dLat = c.radius / 111_320, dLon = c.radius / (111_320 * Math.max(0.1, Math.cos((c.lat * Math.PI) / 180)));
+		return c.lat + dLat >= b.s && c.lat - dLat <= b.n && c.lon + dLon >= b.w && c.lon - dLon <= b.e;
+	});
+	const buildings: MapTile['buildings'] = [];
+	for (const f of flat) {
+		const n = f.ring.length - 1;
+		let la = 0, lo = 0;
+		for (let i = 0; i < n; i++) { la += f.ring[i][0]; lo += f.ring[i][1]; }
+		la /= n; lo /= n;
+		if (near.some((c) => metres(la, lo, c.lat, c.lon) < c.radius)) continue;
+		const ring: V[] = [];
+		for (const [lat, lon] of f.ring) {
+			const g = ground(lat, lon);
+			if (!g) return null;
+			ring.push([lat, lon, g.h]);
+		}
+		buildings.push({ id: f.id, ring, height_m: f.height_m, height_source: f.height_source });
+	}
+	return { tile: { z, x, y, buildings, roads: [], walls: [], water: [] }, groundZ: centre.z };
+}
+
 type Entry = { key: string; state: 'loading' | 'ready' | 'failed'; group?: THREE_NS.Group; data?: MapTile; labels?: TileLabel[];
-	used: number };
+	used: number;
+	/** format 'mvt': the tile's footprints as read, and the terrain zoom its built group stood on */
+	flat?: FlatBuilding[]; groundZ?: number };
 
 export class FootprintTiles {
 	readonly group: THREE_NS.Group;
@@ -160,19 +218,73 @@ export class FootprintTiles {
 		}
 		if (rebuilt) { this.version++; this.compose(); this.o.onChange?.(); }
 	}
+	/** format 'mvt': where another layer draws buildings (city models' plan circles); null while that is not known
+	 * yet, and then no tile is built, so a footprint never shows for a moment under a city model */
+	private hidden: PlanCircle[] | null = null;
+	setHidden(next: PlanCircle[] | null) {
+		if (next === this.hidden) return;
+		this.hidden = next;
+		if (next === null) return;
+		for (const t of this.tiles.values()) if (t.flat) t.groundZ = undefined;   // built again by the next update
+	}
 	/** bumped whenever a tile becomes ready */
 	version = 0;
 
 	constructor(
 		private THREE: Three,
-		private o: { tileUrl: string; frame: Frame; radiusM?: number; maxTiles?: number; requests?: WorldRequests;
-			groundAt?: (lat: number, lon: number) => number | null; onChange?: () => void }
+		private o: {
+			/** 'json': the workbench's /map/tile (heights included); 'mvt': earth's OSM vector tiles, stood on `ground` */
+			format: 'json' | 'mvt';
+			tileUrl: string; frame: Frame; radiusM?: number; maxTiles?: number; requests?: WorldRequests;
+			groundAt?: (lat: number, lon: number) => number | null;
+			/** format 'mvt': the terrain's height and zoom at a point */
+			ground?: GroundAt;
+			onChange?: () => void }
 	) {
+		if (o.format === 'mvt' && !o.ground) throw new Error('footprints: vector tiles carry no heights, so they need `ground`');
 		this.group = new THREE.Group();
 		this.group.name = 'footprints';
 		this.requests = o.requests ?? new WorldRequests();
 		this.ownsRequests = !o.requests;
 		this.requestScope = this.requests.scope('map');
+	}
+
+	/** the scene was laid out about another origin: the built tiles carried there in one rigid move (cityModelTiles') */
+	setFrame(next: Frame) {
+		if (next === this.o.frame) return;
+		const m = new this.THREE.Matrix4().set(...(rigid(this.o.frame, next) as Parameters<THREE_NS.Matrix4['set']>));
+		for (const t of this.tiles.values()) t.group?.applyMatrix4(m);
+		this.o.frame = next;
+	}
+
+	/** format 'mvt': each wanted tile read but not yet standing on finer ground than now answers at its centre, nearest
+	 * first, GROUND_BUDGET_MS of them per frame; while more wait, another frame is asked for */
+	private ground() {
+		const ground = this.o.ground, hidden = this.hidden;
+		if (!ground || hidden === null) return;
+		const t0 = performance.now();
+		let built = false, more = false;
+		for (const k of this.wanted) {
+			const t = this.tiles.get(k);
+			if (!t?.flat) continue;
+			const [z, x, y] = k.split('/').map(Number);
+			if (t.group && t.groundZ !== undefined) {
+				const b = tileLonLat(z, x, y);
+				const now = ground((b.n + b.s) / 2, (b.w + b.e) / 2);
+				if (!now || now.z <= t.groundZ) continue;
+			}
+			if (built && performance.now() - t0 > GROUND_BUDGET_MS) { more = true; break; }
+			const g = groundedTile(z, x, y, t.flat, ground, hidden);
+			if (!g) continue;
+			t.group?.removeFromParent(); disposeGroup(t.group);
+			t.group = buildMapTile(this.THREE, this.o.frame, g.tile);
+			t.groundZ = g.groundZ;
+			t.labels = [];
+			t.state = 'ready';
+			built = true;
+		}
+		if (built) this.version++;
+		if (more) this.o.onChange?.();
 	}
 
 	get stats() {
@@ -201,6 +313,7 @@ export class FootprintTiles {
 			if (t) t.used = this.tick;
 		}
 		this.pump();
+		this.ground();
 		this.compose();
 		this.evict();
 	}
@@ -215,6 +328,15 @@ export class FootprintTiles {
 				id: key, label: `OpenStreetMap ${key}`, kind: 'map' as const, url, priority, cacheable: true,
 				run: async (signal: AbortSignal, requestId: string) => {
 					const r = await responseOrThrow(url, signal, { headers: requestHeaders(url, undefined, requestId) });
+					if (this.o.format === 'mvt') {
+						// stood on the ground by the next update, once the terrain answers under it (ground())
+						const flat = mvtBuildings(decodeMvt(new Uint8Array(await r.arrayBuffer())), z, x, y);
+						signal.throwIfAborted();
+						if (this.disposed) return;
+						t.flat = flat;
+						t.groundZ = undefined;
+						return;
+					}
 					const d = await r.json() as MapTile;
 					signal.throwIfAborted();
 					if (this.disposed) return;
@@ -260,7 +382,8 @@ export class FootprintTiles {
 
 	private evict() {
 		if (this.tiles.size <= 160) return;
-		const old = [...this.tiles.values()].filter((t) => t.state !== 'loading' && t.used < this.tick)
+		// a vector tile read and waiting for its ground has nothing in flight either
+		const old = [...this.tiles.values()].filter((t) => (t.state !== 'loading' || t.flat) && t.used < this.tick)
 			.sort((a, b) => a.used - b.used);
 		for (const t of old.slice(0, this.tiles.size - 120)) {
 			disposeGroup(t.group);

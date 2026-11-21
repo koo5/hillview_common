@@ -40,6 +40,7 @@
 	import { ViewGate, cameraView } from './view';
 	import { AtlasCloud, atlasCredits, loadAtlases, loadTowns, type AtlasVersion } from './atlasCloud';
 	import type { CityModelTiles } from './cityModelTiles';
+	import type { FootprintTiles, PlanCircle } from './footprintTiles';
 	import { WorldRequests } from './worldRequests';
 	import { layerProgress, type LoadProgress } from './loadProgress';
 	import { readLayers, type SceneLayers } from './sceneLayers';
@@ -128,6 +129,9 @@
 	const urls = $derived(earth ? layerUrls(earth.base, earth.releases, layers.terrain) : null);
 	const orthoShown = $derived(layers.ortho && !!urls?.orthoUrl);
 	const buildingsShown = $derived(layers.buildings && !!urls?.modelsUrl);
+	/** OpenStreetMap's building footprints, in the Buildings layer wherever the city models do not stand. Over the bare
+	 * ground only: the surface model already raises the buildings, and its height under a footprint is the roof */
+	const footprintsShown = $derived(layers.buildings && layers.terrain === 'bare' && !!urls?.osmUrl);
 	const namesShown = $derived(layers.names && !!urls?.namesUrl);
 	/** the atlas versions drawn, one per town: their licences and credits join the line */
 	let atlasVersions = $state.raw<AtlasVersion[]>([]);
@@ -135,7 +139,7 @@
 	const credits = $derived.by((): Credit[] => {
 		if (!earth) return [];
 		const c = earthCredits(earth.sources, { orthoYear: orthoShown ? earth.orthoYear : null, models: buildingsShown,
-			names: namesShown });
+			names: namesShown, footprints: footprintsShown });
 		return atlasVersions.length ? atlasCredits(c, atlasVersions) : c;
 	});
 	/** the atlas versions offered, labelled by their pointers; a channel whose pointer cannot be read is not offered */
@@ -156,6 +160,7 @@
 	let camera: THREE_NS.PerspectiveCamera | null = null;
 	let terrain: TerrainTiles | null = null;
 	let buildings: CityModelTiles | null = null;
+	let footprints: FootprintTiles | null = null;
 	let labelPool: LabelPool | null = null;
 	let worldNames: WorldNames | null = null;
 	let depthTarget: DepthTarget | null = null;
@@ -218,6 +223,7 @@
 		atlas?.setScene(frame);
 		terrain?.setFrame(next);
 		buildings?.setFrame(next);
+		footprints?.setFrame(next);
 		labelPool?.setFrame(next);
 	}
 
@@ -258,6 +264,27 @@
 			scene!.add(buildings.group);
 			changed();
 		}).catch((e) => { error = `buildings: ${e instanceof Error ? e.message : String(e)}`; });
+	});
+
+	/** OpenStreetMap's footprints, while they are shown: earth's vector tiles, each building on the terrain drawn */
+	let footprintsGeneration = 0;
+	$effect(() => {
+		const up = sceneUp, tileUrl = footprintsShown ? urls?.osmUrl : undefined;
+		const generation = ++footprintsGeneration;
+		untrack(() => {
+			footprints?.dispose();
+			footprints = null;
+			draw();
+		});
+		if (!up || !tileUrl) return;
+		import('./footprintTiles').then(({ FootprintTiles }) => {
+			if (destroyed || generation !== footprintsGeneration || !frame || !three) return;
+			footprints = new FootprintTiles(three, { format: 'mvt', tileUrl, frame, requests, maxTiles: 36,
+				ground: (lat, lon) => terrain?.groundAt(lat, lon) ?? null,
+				groundAt: (lat, lon) => terrain?.groundAt(lat, lon)?.h ?? null, onChange: changed });
+			scene!.add(footprints.group);
+			changed();
+		}).catch((e) => { error = `footprints: ${e instanceof Error ? e.message : String(e)}`; });
 	});
 
 	// ---- flight ----
@@ -426,6 +453,10 @@
 	let readout = $state('');
 	/** the city models' drawn, loading and capped counts (data-buildings, for checks) */
 	let buildingsAttr = $state('');
+	/** the footprint tiles standing / wanted (data-footprints, for checks) */
+	let footprintsAttr = $state('');
+	/** where no city models stand: footprints everywhere (one array, so the footprints see no change) */
+	const NO_CITY_MODELS: PlanCircle[] = [];
 	/** Leave a shared absolute altitude at its current clearance, so a height gesture or flight starts there. */
 	function releaseSharedAltitude() {
 		if (sharedAltitude === null) return;
@@ -495,6 +526,9 @@
 			lastChange = performance.now();
 			terrain?.update(cam, v);
 			buildings?.update(cam, v);
+			// footprints stand where no city model does: they wait while the models' release is being read
+			footprints?.setHidden(buildingsShown ? buildings?.coverage ?? null : NO_CITY_MODELS);
+			footprints?.update(cam, v);
 			atlas?.update(camera, renderer.getDrawingBufferSize(new three!.Vector2()).y, depthMode === 'reversed');
 		}
 		// drawn only on change: a view the gate held back is asked for once its interval is up
@@ -521,6 +555,10 @@
 			const b = buildings.stats;
 			buildingsAttr = `${b.drawn} drawn, ${b.loading} loading, ${b.capped} capped`;
 		} else buildingsAttr = '';
+		if (footprints) {
+			const f = footprints.stats;
+			footprintsAttr = `${f.ready}/${f.wanted}${f.failed ? ` failed ${f.failed}` : ''}`;
+		} else footprintsAttr = '';
 		if (atlas) {
 			const a = atlas.summary;
 			atlasState = `${a.points} points${a.limited ? ' (budget full)' : ''}${atlas.idle ? '' : ', loading'}`;
@@ -538,7 +576,7 @@
 		const st = terrain?.stats;
 		if (!st) return;
 		settled = st.wanted > 0 && st.loading === 0 && lastAsk !== 'soon' && atlasOpened !== 'opening' &&
-			(!atlas || (atlas.idle && !atlas.error && !atlasFailed)) && (!buildings || buildings.settled) && !labelPool?.stats.loading &&
+			(!atlas || (atlas.idle && !atlas.error && !atlasFailed)) && (!buildings || buildings.settled) && (!footprints || footprints.settled) && !labelPool?.stats.loading &&
 			(!labelPool || !worldNames?.judging || worldNames.judgedAt >= lastChange);
 	}
 
@@ -852,6 +890,7 @@
 		if (foldTimer) clearTimeout(foldTimer);
 		atlas?.dispose();
 		buildings?.dispose();
+		footprints?.dispose();
 		labelPool?.dispose();
 		worldNames?.dispose();
 		depthTarget?.dispose();
@@ -895,6 +934,7 @@
 	data-bearing={bearing.toFixed(2)}
 	data-pitch={pitch.toFixed(2)}
 	data-buildings={buildingsAttr}
+	data-footprints={footprintsAttr}
 	data-frame={frame ? `${frame.lat.toFixed(4)},${frame.lon.toFixed(4)}` : ''}
 	data-fly-speed={flySpeed.toFixed(1)}
 	role="application"
@@ -910,7 +950,7 @@
 			systemError={!!(error ?? earthError ?? atlasError)} />
 	</div>
 	{#if !loading && !error}
-		<WorldSceneControls bind:layers {onstick} {flySpeed} onflyspeed={setFlySpeed} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!urls?.modelsUrl} names={!!urls?.namesUrl}
+		<WorldSceneControls bind:layers {onstick} {flySpeed} onflyspeed={setFlySpeed} onshare={onshare ? shareView : undefined} zoomKeys={ZOOM_PLUS_MINUS.label} ground={!!urls} ortho={!!urls?.orthoUrl} buildings={!!(urls?.modelsUrl || urls?.osmUrl)} names={!!urls?.namesUrl}
 			atlas={atlasOptions} {testid} />
 	{/if}
 	{#if layers.readout && readout}

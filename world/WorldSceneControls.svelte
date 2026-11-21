@@ -22,7 +22,7 @@
 		ground: boolean;
 		/** the channel has an orthophoto */
 		ortho: boolean;
-		/** the channel has city models */
+		/** the channel has buildings: city models, or OpenStreetMap footprints */
 		buildings: boolean;
 		/** the channel has place names */
 		names: boolean;
@@ -94,7 +94,7 @@
 						<label><input type="checkbox" bind:checked={layers.names} data-testid="{testid}-names-toggle" /> place names</label>
 					{/if}
 					{#if buildings}
-						<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" /> Prague 3D buildings</label>
+						<label><input type="checkbox" bind:checked={layers.buildings} data-testid="{testid}-buildings" title="Prague's 3D city models where they stand; OpenStreetMap footprints elsewhere, over the bare ground" /> Buildings</label>
 					{/if}
 				</fieldset>
 			{/if}

@@ -28,6 +28,8 @@ export const MAX_ASSETS = 60, MAX_TRIANGLES = 1_500_000, MAX_BYTES = 192 * 1024 
 // 3 km reach). At 55 degrees a median asset (356 m) stays in out to ~4 km, as the 3 km reach about had it.
 export const MIN_ASSET_PX = 64;
 const RESIDENT = 72;
+/** a release that could not be read covers nothing (CityModelTiles.coverage): one array, so a reader sees no change */
+const NO_COVERAGE: { lat: number; lon: number; radius: number }[] = [];
 // a release is up to 4096 meshes (earth's MAX_RELEASE_ASSETS), ~250 bytes of manifest each
 const MAX_RELEASE_ASSETS = 4096, MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 
@@ -172,6 +174,16 @@ export class CityModelTiles {
 			errors: jobs.filter(j => j.error).map(j => `${j.label}: ${j.error}`) };
 	}
 	get credit() { return this.manifest?.credit; }
+	private coverageOf?: { lat: number; lon: number; radius: number }[];
+	/** where the models stand, as plan circles (each mesh's anchor and bounding radius), for a layer that draws other
+	 * buildings everywhere else: null while the release is being read; empty when it could not be read, since then no
+	 * model is drawn and nothing should be left out for one. The same array while the release is the same. */
+	get coverage(): { lat: number; lon: number; radius: number }[] | null {
+		if (this.manifest)
+			return (this.coverageOf ??= this.manifest.assets.map((a) => ({ lat: a.anchor[0], lon: a.anchor[1], radius: a.radius })));
+		const s = this.stats;
+		return s.loading === 0 && s.errors.length ? NO_COVERAGE : null;
+	}
 	/** the scene was laid out about another origin: the loaded meshes carried there in one rigid move (terrainTiles') */
 	setFrame(next: Frame) {
 		if (next === this.o.frame) return;
