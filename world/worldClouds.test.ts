@@ -66,6 +66,13 @@ test('a drawn-ownership world (the nearest drawing run per voxel) reads like a n
  expect(()=>worldCloudCounts({...value,runs:value.runs.map(({owned_from,...r})=>r)},key,['a','b'])).toThrow('rebuild');
 });
 
+test('a drawn_once world reads like the other ownership worlds',()=>{
+ const value={...manifest(),overlap:'drawn_once',runs:manifest().runs.map(r=>({...r,dense:r.dense?150:0,owned_from:r.dense}))};
+ expect(worldCloudCounts(value,key,['a','b']).get('a')).toEqual({dense:150,sparse:0,resolution:resolution(true,200,0),owned_from:200,foliage:0});
+ expect(()=>worldCloudCounts({...value,runs:value.runs.map(({owned_from,...r})=>r)},key,['a','b'])).toThrow('rebuild');
+ expect(()=>worldCloudCounts({...value,overlap:'drawn_twice'},key,['a','b'])).toThrow('rebuild');
+});
+
 // A WORLD WITH FOLIAGE (ATLAS2, recon/directions aw02): schema 4, kinds {dense: 1, foliage: 3}; the API's
 // world_build.source_manifest writes it and world_sources.validate_manifest reads it the same way
 const leaves=(state:FoliageResolution['state'],n:number,expected:number|null=n):FoliageResolution=>

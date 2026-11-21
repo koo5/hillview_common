@@ -27,7 +27,7 @@ export type AtlasPointer = { schema: 1; key: string; resolution: 'stored' | 'ful
 export type AtlasCredit = { text: string; url: string | null };
 export type AtlasVersion = {
 	schema: 1; key: string; resolution: 'stored' | 'full'; built_at: number; points: number;
-	origin: [number, number, number]; overlap: 'all' | 'nearest' | 'drawn';
+	origin: [number, number, number]; overlap: 'all' | 'nearest' | 'drawn' | 'drawn_once';
 	licence: { spdx: string; name: string; url: string }; credits: AtlasCredit[]; modified: string;
 	runs: { i: number; id: string; name: string | null; points: number; dense_state: string | null }[];
 	files: { tree: string; cameras: string };

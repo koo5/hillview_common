@@ -16,7 +16,7 @@ export type WorldResolution = 'stored'|'full';
  *  read ('unavailable'). A stored world takes the source's file as it is and states nothing (null). */
 export type FoliageResolution = {state:'full'|'capped'|'not_home_yet'|'unavailable'; expected_points:number|null;
  included_points:number; reason:string};
-/** dense = points drawn. In an ownership world (overlap: 'nearest' or 'drawn', ATLAS2's rules) owned_from is the run's
+/** dense = points drawn. In an ownership world (overlap: 'nearest', 'drawn' or 'drawn_once', ATLAS2's rules) owned_from is the run's
  *  source count before ownership, and the full-stream counts in dense_resolution describe that source.
  *  foliage = the run's foliage points in the tree (0 where the world names no foliage source for it); foliage_from
  *  names that source, foliage_owned_from its count before ownership. */
@@ -48,6 +48,9 @@ function foliageCounts(r:Record<string,unknown>,schema4:boolean,owned:boolean,mo
 	return {...named,foliage_resolution:res};
 }
 
+/** The ownership rules a world's manifest may name (the API's world_sources.validate_manifest reads the same three). */
+export const OWNERSHIP_RULES: readonly string[] = ['nearest', 'drawn', 'drawn_once'];
+
 export function worldCloudCounts(value: unknown, key: string, ids: string[], mode:WorldResolution = 'full'): Map<string, WorldCloudCounts> {
 	const bad=()=>new Error('World cloud-source metadata missing or invalid; rebuild the merged octree');
 	if(!value||typeof value!=='object')throw bad();
@@ -58,7 +61,7 @@ export function worldCloudCounts(value: unknown, key: string, ids: string[], mod
 	const kindsOk=!!kinds&&typeof kinds==='object'&&kinds.dense===DENSE_CLOUD&&
 		(schema4?kinds.foliage===FOLIAGE_CLOUD&&Object.keys(kinds).length===2:Object.keys(kinds).length===1);
 	if((data.schema!==3&&!schema4)||data.resolution!==mode||data.key!==key||data.field!=='UserData'||!kindsOk||!Array.isArray(data.runs)||data.runs.length!==ids.length||
-		('overlap' in data&&data.overlap!=='nearest'&&data.overlap!=='drawn'))throw bad();
+		('overlap' in data&&!OWNERSHIP_RULES.includes(data.overlap as string)))throw bad();
 	if(schema4&&!data.runs.some(r=>!!r&&typeof r==='object'&&'foliage_from' in r))throw bad();
 	const owned='overlap' in data;
 	const result=new Map<string,WorldCloudCounts>();
