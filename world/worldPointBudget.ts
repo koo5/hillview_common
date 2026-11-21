@@ -2,7 +2,7 @@
  * preference. A viewer whose residency holds more per point than the geometry (a WorldPlacement's drawn form, ea14)
  * passes that size: the budget then admits that many fewer points. */
 export const WORLD_POINT_BUDGETS = [16,32,64,128,256,512,1024] as const;
-export const DEFAULT_WORLD_POINT_MIB = 64;
+export const DEFAULT_WORLD_POINT_MIB = 256;
 export const worldBudgetPoints = (mib:number,bytesPerPoint=24)=>Math.floor(mib*1024*1024/Math.max(24,bytesPerPoint));
 export function worldPointMiB(raw:string|null):number {
  if(raw===null)return DEFAULT_WORLD_POINT_MIB;

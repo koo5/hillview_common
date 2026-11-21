@@ -93,7 +93,7 @@
 	let {
 		earthUrl, channel = 'prod', lat, lon, bearing, pitch = -5, eyeM = 2, initialAltitude, fovY = 55, landAtEye = false,
 		onview, onshare,
-		onlook, oneye, onmove, locationPrecisionM = 1, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 64, layersKey = 'world.scene.layers',
+		onlook, oneye, onmove, locationPrecisionM = 1, atlasUrl, atlasChannels = ['prod'], atlasBudgetMiB = 256, layersKey = 'world.scene.layers',
 		testid = 'world-scene'
 	}: Props = $props();
 

@@ -13,9 +13,9 @@ export type PointSizing = { nearPx: number; farPx: number; kneeM: number };
 
 /** the ranges a viewer offers, and the first choice */
 export const POINT_SIZING = {
-	nearPx: { min: 0.5, max: 10, step: 0.5, initial: 9 },
-	farPx: { min: 1, max: 16, step: 0.5, initial: 1 },
-	kneeM: { min: 5, max: 2000, step: 5, initial: 10 }
+	nearPx: { min: 0.5, max: 10, step: 0.5, initial: 10 },
+	farPx: { min: 1, max: 16, step: 0.5, initial: 1.5 },
+	kneeM: { min: 5, max: 2000, step: 5, initial: 25 }
 } as const;
 
 export function initialPointSizing(): PointSizing {
